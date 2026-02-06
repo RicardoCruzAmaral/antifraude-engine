@@ -19,6 +19,7 @@ type InputSummary = {
   telefone_contato: string | null;
   valor_celular: number | null;
   cep: string | null;
+  imeiCode: string | null;
 
   modelo_declarado: string | null;
 
@@ -101,7 +102,7 @@ function buildInputSummary(body: any): InputSummary {
         ? null
         : Number(body.valor_celular),
     cep: body?.cep ? onlyDigits(String(body.cep)) : null,
-
+    imeiCode: body?.imeiCode ? onlyDigits(String(body.imeiCode)) : null,
     modelo_declarado: body?.modelo_declarado ? String(body.modelo_declarado).trim() : null,
 
     partnerCode: body?.partnerCode ? String(body.partnerCode) : null,
