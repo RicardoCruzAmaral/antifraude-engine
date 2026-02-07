@@ -102,7 +102,7 @@ function buildInputSummary(body: any): InputSummary {
         ? null
         : Number(body.valor_celular),
     cep: body?.cep ? onlyDigits(String(body.cep)) : null,
-    imeiCode: body?.imeiCode ? onlyDigits(String(body.imeiCode)) : null,
+    imeiCode: body?.imeiCode ? String(body.imeiCode).trim() : null,
     modelo_declarado: body?.modelo_declarado ? String(body.modelo_declarado).trim() : null,
 
     partnerCode: body?.partnerCode ? String(body.partnerCode) : null,
@@ -534,6 +534,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     input_summary = buildInputSummary(req.body);
     cpfForLog = input_summary.cpf;
+    
+    mark("input_summary_built", true, {
+      hasImeiCode: !!input_summary?.imeiCode,
+      imeiCode: input_summary?.imeiCode ?? null,
+    });
 
     if (!cpfForLog) {
       mark("validate_input", false, { reason: "missing_cpf" });
