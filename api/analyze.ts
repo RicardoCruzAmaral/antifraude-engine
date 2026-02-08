@@ -3,7 +3,7 @@ import type { VercelRequest, VercelResponse } from "@vercel/node";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
 import { enrich, normalizeInput } from "../src/providers/enrichment";
-import { computeFlags } from "../src/engine/decision";
+
 
 // (mantive os imports que você tinha; ainda não usamos o decision engine aqui)
 import { imeiCheck } from "../src/providers/imei";
@@ -399,37 +399,7 @@ function computeScoreLocal(enrichResult: any, input: InputSummary): ScoreResult 
   }
 
   const score = breakdown.reduce((acc, x) => acc + x.points, 0);
-  return { score, breakdown };
-}
-
-function checkHardBlocks(summary: any) {
-  const motivos = summary?.motivos ?? [];
-
-  const HARD_BLOCKS = [
-    "NOME DIVERGENTE",
-    "CPF INVÁLIDO",
-    "CPF COM SITUAÇÃO IRREGULAR",
-    "CPF NÃO ENCONTRADO",
-    "CPF CONSTA OBITO",
-    "CPF SOCIO DE CNAE IMPEDIDO",
-    "CONSTA MANDADO DE PRISAO",
-    "CONSTAM 5 AÇÕES CIVEIS COMO AUTOR",
-    "POSSUI ACAO CRIMINAL",
-  ];
-
-  const hit = motivos.find((m: string) => HARD_BLOCKS.includes(m));
-
-  const risco = summary?.riscoCredito;
-  const prob = summary?.probabilidadePagamento;
-
-  const combo =
-    risco === "ALTÍSSIMO" && (prob === "BAIXA" || prob === "BAIXÍSSIMA");
-
-  return {
-    isHardBlock: !!hit || combo,
-    reasons: hit ? [hit] : combo ? ["RISCO_ALTISSIMO_PROB_BAIXA"] : [],
-  };
-}
+  return { score, breakdown };}
 
 function checkHardBlocks(summary: any) {
   const motivos = summary?.motivos ?? [];
@@ -468,7 +438,7 @@ function classifyProfileByScore(score: number): "A" | "B1" | "B2" | "C" {
 }
 
 
-function computeFlags(enrichResult: any, input: any) {
+function computeTelemetryFlags(enrichResult: any, input: any) {
   const motivos = Array.isArray(enrichResult?.summary?.motivos)
     ? enrichResult.summary.motivos
     : [];
@@ -711,16 +681,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         console.log("🟩 returned from computeScoreLocal", s);
 
         // 🔒 GARANTIAS
-        score = Number.isFinite(s?.total)
-          ? s.total
-          : Number.isFinite(s?.score)
-          ? s.score
-          : 0;
-
+        score = Number.isFinite(s?.score) ? s.score : 0;
         scoreBreakdown = Array.isArray(s?.breakdown) ? s.breakdown : [];
 
         // ✅ FLAGS (aqui)
-        const flags = computeFlags(enrichResult, input_summary!);
+        const flags = computeTelemetryFlags(enrichResult, input_summary!);
 
         mark("score_computed", true, {
           score,
@@ -728,8 +693,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           flags,
         });
 
+
+
         // 4.3 Perfil
-        const profile = classifyProfileByScore(score);
+        const safeScore = score ?? 0;
+        const profile = classifyProfileByScore(safeScore);
+
 
         // 4.4 Decisão por perfil
         decision = profile === "C" ? "DECLINE" : "APPROVE";
