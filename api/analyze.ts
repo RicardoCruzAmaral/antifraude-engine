@@ -392,7 +392,7 @@ function computeScoreLocal(enrichResult: any, input: InputSummary): ScoreResult 
 
   // valor_celular high value
   const highMin = envInt("VALOR_CELULAR_HIGH_VALUE_MIN", 5000);
-  const highPts = envInt("SCORE_VALOR_CELULAR_HIGH_VALUE", 5);
+  const highPts = envInt("SCORE_VALOR_CELULAR_HIGH_VALUE", 0);
 
   if (typeof input.valor_celular === "number" && input.valor_celular > highMin) {
     breakdown.push({ rule: "VALOR_CELULAR_HIGH_VALUE", points: highPts });
