@@ -1,19 +1,15 @@
 {
   "name": "antifraude-engine",
   "version": "1.0.0",
-  "private": true,
   "type": "commonjs",
-  "scripts": {
-    "build": "echo \"no build\"",
-    "dev": "vercel dev"
-  },
+  "scripts": {},
   "dependencies": {
     "@supabase/supabase-js": "^2.90.1",
     "@vercel/node": "^5.5.17",
     "dotenv": "^17.2.3"
   },
   "devDependencies": {
-    "@types/node": "^25.0.7",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "@types/node": "^25.0.7"
   }
 }
