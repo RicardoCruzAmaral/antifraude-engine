@@ -382,13 +382,14 @@ function computeScoreLocal(enrichResult: any, input: InputSummary): ScoreResult 
   // quantidadeProcessos
   const qpRaw = enrichResult?.summary?.quantidadeProcessos;
   const qp = Number.isFinite(Number(qpRaw)) ? Number(qpRaw) : 0;
-  const P_PROC_1_3 = envInt("SCORE_PROC_1_3", 10);
   const P_PROC_4_5 = envInt("SCORE_PROC_4_5", 20);
   const P_PROC_GT_5 = envInt("SCORE_PROC_GT_5", 25);
 
-  if (qp > 0 && qp <= 3) breakdown.push({ rule: "PROCESSOS_1_3", points: P_PROC_1_3 });
-  else if (qp > 3 && qp <= 5) breakdown.push({ rule: "PROCESSOS_4_5", points: P_PROC_4_5 });
-  else if (qp > 5) breakdown.push({ rule: "PROCESSOS_GT_5", points: P_PROC_GT_5 });
+  if (qp > 3 && qp <= 5) {
+  breakdown.push({ rule: "PROCESSOS_4_5", points: P_PROC_4_5 });
+  } else if (qp > 5) {
+  breakdown.push({ rule: "PROCESSOS_GT_5", points: P_PROC_GT_5 });
+  }
 
   // valor_celular high value
   const highMin = envInt("VALOR_CELULAR_HIGH_VALUE_MIN", 5000);
