@@ -345,8 +345,8 @@ function computeScoreLocal(enrichResult: any, input: InputSummary): ScoreResult 
   console.log("motivos:", motivos);
 
   // Divergências cadastrais (motivos)
-  const P_EMAIL = envInt("SCORE_EMAIL_DIVERGENTE", 5);
-  const P_TEL = envInt("SCORE_TELEFONE_DIVERGENTE", 5);
+  const P_EMAIL = envInt("SCORE_EMAIL_DIVERGENTE", 0);
+  const P_TEL = envInt("SCORE_TELEFONE_DIVERGENTE", 0);
   const P_CEP = envInt("SCORE_CEP_DIVERGENTE", 5);
 
   if (hasReason(motivos, "EMAIL DIVERGENTE")) breakdown.push({ rule: "EMAIL_DIVERGENTE", points: P_EMAIL });
@@ -392,7 +392,7 @@ function computeScoreLocal(enrichResult: any, input: InputSummary): ScoreResult 
 
   // valor_celular high value
   const highMin = envInt("VALOR_CELULAR_HIGH_VALUE_MIN", 5000);
-  const highPts = envInt("SCORE_VALOR_CELULAR_HIGH_VALUE", 10);
+  const highPts = envInt("SCORE_VALOR_CELULAR_HIGH_VALUE", 5);
 
   if (typeof input.valor_celular === "number" && input.valor_celular > highMin) {
     breakdown.push({ rule: "VALOR_CELULAR_HIGH_VALUE", points: highPts });
@@ -412,7 +412,7 @@ function checkHardBlocks(summary: any) {
     "CPF CONSTA OBITO",
     "CPF SOCIO DE CNAE IMPEDIDO",
     "CONSTA MANDADO DE PRISAO",
-    "CONSTAM 5 AÇÕES CIVEIS COMO AUTOR",
+    //"CONSTAM 5 AÇÕES CIVEIS COMO AUTOR",
     "POSSUI ACAO CRIMINAL",
   ];
 
@@ -433,7 +433,7 @@ function checkHardBlocks(summary: any) {
 function classifyProfileByScore(score: number): "A" | "B1" | "B2" | "C" {
   if (score <= 10) return "A";
   if (score <= 25) return "B1";
-  if (score <= 40) return "B2";
+  if (score <= 45) return "B2";
   return "C";
 }
 
@@ -504,7 +504,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     input_summary = buildInputSummary(req.body);
     cpfForLog = input_summary.cpf;
-    
+
+
+    const fingerprintSnapshot = input_summary?.device
+      ? {
+          ip: input_summary.device.ip ?? null,
+          visitorId: input_summary.device.visitorId ?? null,
+          os: input_summary.device.os ?? null,
+          gpu: input_summary.device.gpu ?? null,
+          cores: input_summary.device.cores ?? null,
+          isMobile: input_summary.device.isMobile ?? null,
+          osVersion: input_summary.device.osVersion ?? null,
+          browserName: input_summary.device.browserName ?? null,
+          screenWidthPhysical: input_summary.device.screenWidthPhysical ?? null,
+          screenHeightPhysical: input_summary.device.screenHeightPhysical ?? null,
+          fingerprintProvider: input_summary.device.fingerprintProvider ?? null,
+        }
+      : null;
+
+    mark("fingerprint_snapshot", true, { hasFingerprint: !!fingerprintSnapshot });
+
+
+
+
     mark("input_summary_built", true, {
       hasImeiCode: !!input_summary?.imeiCode,
       imeiCode: input_summary?.imeiCode ?? null,
@@ -563,6 +585,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         ruleVersion: finalRuleVersion,
         timingsMs: { cacheGetMs, totalMs },
         events,
+        fingerprint: fingerprintSnapshot,
       };
 
       if (supabase) {
@@ -818,6 +841,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // debug / calibração (tira depois se quiser)
       scoreBreakdown,
       events,
+      fingerprint: fingerprintSnapshot,
     };
 
     // ===== 7) LOG ÚNICO =====

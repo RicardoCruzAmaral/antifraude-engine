@@ -8,7 +8,7 @@ export const riskConfig = {
       "CPF CONSTA OBITO",
       "CPF SOCIO DE CNAE IMPEDIDO",
       "CONSTA MANDADO DE PRISAO",
-      "CONSTAM 5 AÇÕES CIVEIS COMO AUTOR",
+      //"CONSTAM 5 AÇÕES CIVEIS COMO AUTOR",
       "POSSUI ACAO CRIMINAL",
     ],
     riscoPagamentoCombo: {
@@ -19,8 +19,8 @@ export const riskConfig = {
 
   weights: {
     divergencias: {
-      EMAIL_DIVERGENTE: 5,
-      TELEFONE_DIVERGENTE: 5,
+      EMAIL_DIVERGENTE: 0,
+      TELEFONE_DIVERGENTE: 0,
       CEP_DIVERGENTE: 5,
     },
 
@@ -48,7 +48,7 @@ export const riskConfig = {
 
     celular: {
       highValueMin: 5000,
-      points: 10,
+      points: 0,
     },
   },
 
