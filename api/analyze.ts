@@ -358,8 +358,8 @@ function computeScoreLocal(enrichResult: any, input: InputSummary): ScoreResult 
   const riscoMap: Record<string, number> = {
     ALTISSIMO: envInt("SCORE_RISCO_ALTISSIMO", 20),
     ALTO: envInt("SCORE_RISCO_ALTO", 15),
-    MEDIO: envInt("SCORE_RISCO_MEDIO", 10),
-    BAIXO: envInt("SCORE_RISCO_BAIXO", 5),
+    MEDIO: envInt("SCORE_RISCO_MEDIO", 5),
+    BAIXO: envInt("SCORE_RISCO_BAIXO", 0),
     BAIXISSIMO: envInt("SCORE_RISCO_BAIXISSIMO", 0),
   };
   if (risco && riscoMap[risco] !== undefined) breakdown.push({ rule: `RISCO_${risco}`, points: riscoMap[risco] });
@@ -369,8 +369,8 @@ function computeScoreLocal(enrichResult: any, input: InputSummary): ScoreResult 
 
   const probMap: Record<string, number> = {
     ALTISSIMA: envInt("SCORE_PROB_ALTISSIMA", 0),
-    ALTA: envInt("SCORE_PROB_ALTA", 5),
-    MEDIA: envInt("SCORE_PROB_MEDIA", 10),
+    ALTA: envInt("SCORE_PROB_ALTA", 0),
+    MEDIA: envInt("SCORE_PROB_MEDIA", 5),
     BAIXA: envInt("SCORE_PROB_BAIXA", 15),
     BAIXISSIMA: envInt("SCORE_PROB_BAIXISSIMA", 20),
   };
@@ -393,7 +393,7 @@ function computeScoreLocal(enrichResult: any, input: InputSummary): ScoreResult 
 
   // valor_celular high value
   const highMin = envInt("VALOR_CELULAR_HIGH_VALUE_MIN", 5000);
-  const highPts = envInt("SCORE_VALOR_CELULAR_HIGH_VALUE", 0);
+  const highPts = envInt("SCORE_VALOR_CELULAR_HIGH_VALUE", 5);
 
   if (typeof input.valor_celular === "number" && input.valor_celular > highMin) {
     breakdown.push({ rule: "VALOR_CELULAR_HIGH_VALUE", points: highPts });
