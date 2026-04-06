@@ -6,7 +6,7 @@ import { enrich, normalizeInput } from "../src/providers/enrichment";
 
 
 // (mantive os imports que você tinha; ainda não usamos o decision engine aqui)
-import { imeiCheck } from "../src/providers/imei";
+import { imeiCheckReal } from "../src/providers/imei";
 
 // ===== Tipos =====
 type Decision = "APPROVE" | "DECLINE";
@@ -263,47 +263,6 @@ async function safeInsertEnrichmentRaw(
   }
 }
 
-// ===== IMEI mock =====
-async function imeiCheckMock(timeoutMs: number): Promise<ImeiResult> {
-  const started = Date.now();
-  const mockMs = envInt("IMEI_MOCK_MS", 120);
-  let timedOut = false;
-
-  try {
-    const r = await Promise.race([
-      new Promise<ImeiResult>((resolve) =>
-        setTimeout(
-          () =>
-            resolve({
-              ok: true,
-              provider: "mock",
-              ms: Date.now() - started,
-              httpStatus: 200,
-              reason: "IMEI_OK",
-            }),
-          mockMs
-        )
-      ),
-      new Promise<ImeiResult>((_, reject) =>
-        setTimeout(() => {
-          timedOut = true;
-          reject(new Error("IMEI_TIMEOUT"));
-        }, timeoutMs)
-      ),
-    ]);
-    return r;
-  } catch {
-    return {
-      ok: false,
-      provider: "mock",
-      ms: Date.now() - started,
-      httpStatus: null,
-      timedOut,
-      reason: timedOut ? "IMEI_TIMEOUT" : "IMEI_FAIL",
-    };
-  }
-}
-
 // ===== HARD BLOCKS (TechTrail + combo risco/prob) =====
 function detectHardBlock(enrichResult: any): { isHardBlock: boolean; reasons: string[] } {
   const motivos: string[] = Array.isArray(enrichResult?.summary?.motivos) ? enrichResult.summary.motivos : [];
@@ -490,6 +449,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   let finalRuleVersion = "mirror-v1";
   let cpfForLog: string | null = null;
   let input_summary: InputSummary | null = null;
+
+  let imeiResultGlobal: any = null;
 
   const supabaseMissingPolicy = envStr("SUPABASE_MISSING_POLICY", "continue"); // continue | fail
   const supabase = getSupabaseOrNull();
@@ -699,43 +660,112 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         score = null;
         scoreBreakdown = [];
       } else {
-        // 4.2 Score
-        console.log("🟦 about to call computeScoreLocal");
-        const s = computeScoreLocal(enrichResult, input_summary!);
-        console.log("🟩 returned from computeScoreLocal", s);
+    // 4.2 Score
+    console.log("🟦 about to call computeScoreLocal");
+    const s = computeScoreLocal(enrichResult, input_summary!);
+    console.log("🟩 returned from computeScoreLocal", s);
 
-        // 🔒 GARANTIAS
-        score = Number.isFinite(s?.score) ? s.score : 0;
-        scoreBreakdown = Array.isArray(s?.breakdown) ? s.breakdown : [];
+    // 🔒 GARANTIAS
+    score = Number.isFinite(s?.score) ? s.score : 0;
+    scoreBreakdown = Array.isArray(s?.breakdown) ? s.breakdown : [];
 
-        // ✅ FLAGS (aqui)
-        const flags = computeTelemetryFlags(enrichResult, input_summary!);
+    // ✅ FLAGS
+    const flags = computeTelemetryFlags(enrichResult, input_summary!);
 
-        mark("score_computed", true, {
-          score,
-          breakdown: scoreBreakdown,
-          flags,
-        });
+    mark("score_computed", true, {
+      score,
+      breakdown: scoreBreakdown,
+      flags,
+    });
 
+    // 4.3 IMEI opcional
+    const imeiTimeoutMs = envInt("IMEI_TIMEOUT_MS", 20000);
+    const imeiPenalty = envInt("SCORE_IMEI_PROBLEM", 5);
 
+    let imeiResult: any = null;
 
-        // 4.3 Perfil
-        const safeScore = score ?? 0;
-        const profile = classifyProfileByScore(safeScore);
+    if (input_summary?.imeiCode) {
+      mark("imei_check_start", true, {
+        hasImei: true,
+        modeloDeclarado: input_summary?.modelo_declarado ?? null,
+      });
 
+      imeiResult = await imeiCheckReal({
+        imeiCode: input_summary.imeiCode,
+        modeloDeclarado: input_summary.modelo_declarado,
+        timeoutMs: imeiTimeoutMs,
+      });
 
-        // 4.4 Decisão por perfil
-        decision = profile === "C" ? "DECLINE" : "APPROVE";
+      imeiResultGlobal = imeiResult;
 
-        reasons = scoreBreakdown.map((b) => b.rule);
+      if (supabase && imeiResult) {
+        try {
+          await supabase.from("imei_raw").insert({
+            trace_id: traceId,
+            cpf: cpfForLog,
+            provider: imeiResult.provider,
+            ok: imeiResult.ok,
+            http_status: imeiResult.httpStatus ?? null,
+            latency_ms: imeiResult.ms ?? null,
+            service_id: imeiResult.serviceId ?? null,
+            brand_expected: imeiResult.brandExpected ?? null,
+            brand_returned: imeiResult.brandReturned ?? null,
+            reason: imeiResult.reason,
+            request_params: {
+              imeiCode: input_summary?.imeiCode ?? null,
+              modeloDeclarado: input_summary?.modelo_declarado ?? null,
+            },
+            summary_json: imeiResult.summary ?? null,
+            response_json: imeiResult.raw ?? null,
+            created_at: new Date().toISOString(),
+          });
+        } catch (err) {
+          console.error("[imei_raw] insert failed", err);
+        }
+      }
 
-        mark("decision_profiled", true, {
-          profile,
-          decision,
-          score,
-          flags,
+      mark("imei_check_done", imeiResult.ok, {
+        reason: imeiResult.reason,
+        provider: imeiResult.provider,
+        ms: imeiResult.ms,
+        brandExpected: imeiResult.brandExpected ?? null,
+        brandReturned: imeiResult.brandReturned ?? null,
+        serviceId: imeiResult.serviceId ?? null,
+        imeiSummary: imeiResult.summary ?? null,
+      });
+
+      if (
+        imeiResult.reason === "IMEI_INVALID" ||
+        imeiResult.reason === "IMEI_FAIL" ||
+        imeiResult.reason === "IMEI_BRAND_MISMATCH"
+      ) {
+        score += imeiPenalty;
+        scoreBreakdown.push({
+          rule: imeiResult.reason,
+          points: imeiPenalty,
         });
       }
+    } else {
+      mark("imei_check_skipped", true, { reason: "missing_imei" });
+    }
+
+    // 4.4 Perfil
+    const safeScore = score ?? 0;
+    const profile = classifyProfileByScore(safeScore);
+
+    // 4.5 Decisão por perfil
+    decision = profile === "C" ? "DECLINE" : "APPROVE";
+
+    reasons = scoreBreakdown.map((b) => b.rule);
+
+    mark("decision_profiled", true, {
+      profile,
+      decision,
+      score,
+      flags,
+      imeiReason: imeiResult?.reason ?? null,
+    });
+    }
     } else {
       // 4.5 Falha técnica
       isTechFail = true;
@@ -746,30 +776,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       reasons = [enrichTimedOut ? "ENRICHMENT_TIMEOUT" : "ENRICHMENT_FAILED"];
       score = null;
       scoreBreakdown = [];
-    }
-
-
-    // ===== 4.1) IMEI (ainda opcional/mock) =====
-    const imeiPolicy = envStr("IMEI_POLICY", "off"); // off | always_mock
-    const imeiTimeoutMs = envInt("IMEI_TIMEOUT_MS", 4000);
-
-    // NÃO roda IMEI se hard block já derrubou ou se tech fail
-    if (!isHardBlock && !isTechFail && imeiPolicy === "always_mock") {
-      mark("imei_check_start", true, { timeoutMs: imeiTimeoutMs });
-
-      const imeiStarted = Date.now();
-      const imeiRes = await imeiCheckMock(imeiTimeoutMs);
-      const imeiMs = Date.now() - imeiStarted;
-
-      mark("imei_check_done", imeiRes.ok, {
-        imeiMs,
-        timedOut: !!imeiRes.timedOut,
-        provider: imeiRes.provider,
-        httpStatus: imeiRes.httpStatus ?? null,
-      });
-
-      if (imeiRes.ok) reasons = [...reasons, "IMEI_OK"];
-      else reasons = [...reasons, imeiRes.reason ?? "IMEI_FAIL"];
     }
 
     mark("decision_made", true, { decision, ruleVersion, isTechFail, isHardBlock, score });
@@ -843,6 +849,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       scoreBreakdown,
       events,
       fingerprint: fingerprintSnapshot,
+      imei: imeiResultGlobal
+        ? {
+            reason: imeiResultGlobal.reason,
+            brandExpected: imeiResultGlobal.brandExpected ?? null,
+            brandReturned: imeiResultGlobal.brandReturned ?? null,
+            summary: imeiResultGlobal.summary ?? null,
+          }
+        : null,
     };
 
     // ===== 7) LOG ÚNICO =====
