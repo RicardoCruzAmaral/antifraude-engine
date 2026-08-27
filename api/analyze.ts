@@ -2,34 +2,23 @@
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
+import type {
+  AnalysisSource,
+  Decision,
+  EnrichmentResultForDecision,
+  HardBlockResult,
+  InputSummary,
+  NormalizedImeiResult,
+  Profile,
+  ScoreBreakdownItem,
+  ScoreResult,
+  TelemetryFlags,
+} from "../src/domain/contracts";
 import { enrich, normalizeInput } from "../src/providers/enrichment";
 
 
 // (mantive os imports que você tinha; ainda não usamos o decision engine aqui)
 import { imeiCheckReal } from "../src/providers/imei";
-
-// ===== Tipos =====
-type Decision = "APPROVE" | "DECLINE";
-type Source = "cache" | "engine";
-
-type InputSummary = {
-  cpf: string | null;
-  nome: string | null;
-  email: string | null;
-  telefone_contato: string | null;
-  valor_celular: number | null;
-  cep: string | null;
-  imeiCode: string | null;
-
-  modelo_declarado: string | null;
-
-  partnerCode: string | null;
-  salesChannel: string | null;
-  proposalId: string | null;
-  sessionId: string | null;
-
-  device: any | null;
-};
 
 type CacheRow = {
   cpf: string;
@@ -48,9 +37,6 @@ type ImeiResult = {
   timedOut?: boolean;
   reason?: string; // "IMEI_OK" / "IMEI_FAIL" / "IMEI_TIMEOUT"
 };
-
-type ScoreBreakdownItem = { rule: string; points: number };
-type ScoreResult = { score: number; breakdown: ScoreBreakdownItem[] };
 
 // ===== Utils =====
 function nowIso() {
@@ -195,7 +181,7 @@ async function safeLogDecision(
   row: {
     trace_id: string;
     cpf: string | null;
-    source: Source;
+    source: AnalysisSource;
     cache_hit: boolean;
     decision: Decision;
     score: number | null;
@@ -264,7 +250,7 @@ async function safeInsertEnrichmentRaw(
 }
 
 // ===== HARD BLOCKS (TechTrail + combo risco/prob) =====
-function detectHardBlock(enrichResult: any): { isHardBlock: boolean; reasons: string[] } {
+function detectHardBlock(enrichResult: EnrichmentResultForDecision): HardBlockResult {
   const motivos: string[] = Array.isArray(enrichResult?.summary?.motivos) ? enrichResult.summary.motivos : [];
 
   const hardMotivos = [
@@ -292,7 +278,7 @@ function detectHardBlock(enrichResult: any): { isHardBlock: boolean; reasons: st
 }
 
 // ===== SCORE (parametrizável por env, com defaults) =====
-function computeScoreLocal(enrichResult: any, input: InputSummary): ScoreResult {
+function computeScoreLocal(enrichResult: EnrichmentResultForDecision, input: InputSummary): ScoreResult {
 
   console.log("✅ DEBUG computeScoreLocal ENTER");
 
@@ -390,7 +376,7 @@ function checkHardBlocks(summary: any) {
   };
 }
 
-function classifyProfileByScore(score: number): "A" | "B1" | "B2" | "C" {
+function classifyProfileByScore(score: number): Profile {
   if (score <= 10) return "A";
   if (score <= 25) return "B1";
   if (score <= 45) return "B2";
@@ -398,7 +384,10 @@ function classifyProfileByScore(score: number): "A" | "B1" | "B2" | "C" {
 }
 
 
-function computeTelemetryFlags(enrichResult: any, input: any) {
+function computeTelemetryFlags(
+  enrichResult: EnrichmentResultForDecision,
+  input: InputSummary
+): TelemetryFlags {
   const motivos = Array.isArray(enrichResult?.summary?.motivos)
     ? enrichResult.summary.motivos
     : [];
@@ -441,7 +430,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   let responseBody: any = null;
 
-  let finalSource: Source | null = null;
+  let finalSource: AnalysisSource | null = null;
   let finalCacheHit = false;
   let finalDecision: Decision | null = null;
   let finalScore: number | null = null;
@@ -450,7 +439,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   let cpfForLog: string | null = null;
   let input_summary: InputSummary | null = null;
 
-  let imeiResultGlobal: any = null;
+  let imeiResultGlobal: NormalizedImeiResult | null = null;
 
   const supabaseMissingPolicy = envStr("SUPABASE_MISSING_POLICY", "continue"); // continue | fail
   const supabase = getSupabaseOrNull();
@@ -682,7 +671,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const imeiTimeoutMs = envInt("IMEI_TIMEOUT_MS", 20000);
     const imeiPenalty = envInt("SCORE_IMEI_PROBLEM", 5);
 
-    let imeiResult: any = null;
+    let imeiResult: NormalizedImeiResult | null = null;
 
     if (input_summary?.imeiCode) {
       mark("imei_check_start", true, {
