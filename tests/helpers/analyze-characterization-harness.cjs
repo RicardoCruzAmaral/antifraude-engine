@@ -109,7 +109,29 @@ function loadAnalyzeForCharacterization(options = {}) {
     return defaultRequire(request);
   };
 
-  compiledModule._compile(transpileAnalyzeForCharacterization(), ANALYZE_PATH);
+  const originalTypeScriptLoader = Module._extensions[".ts"];
+  Module._extensions[".ts"] = (loadedModule, filename) => {
+    const source = fs.readFileSync(filename, "utf8");
+    const output = ts.transpileModule(source, {
+      fileName: filename,
+      compilerOptions: {
+        target: ts.ScriptTarget.ES2020,
+        module: ts.ModuleKind.CommonJS,
+        esModuleInterop: true,
+      },
+    }).outputText;
+    loadedModule._compile(output, filename);
+  };
+
+  try {
+    compiledModule._compile(transpileAnalyzeForCharacterization(), ANALYZE_PATH);
+  } finally {
+    if (originalTypeScriptLoader) {
+      Module._extensions[".ts"] = originalTypeScriptLoader;
+    } else {
+      delete Module._extensions[".ts"];
+    }
+  }
   return { exports: compiledModule.exports, calls };
 }
 

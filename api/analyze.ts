@@ -6,14 +6,16 @@ import type {
   AnalysisSource,
   Decision,
   EnrichmentResultForDecision,
-  HardBlockResult,
   InputSummary,
   NormalizedImeiResult,
-  Profile,
   ScoreBreakdownItem,
-  ScoreResult,
   TelemetryFlags,
 } from "../src/domain/contracts";
+import {
+  classifyProfileByScore,
+  computeScoreLocal,
+  detectHardBlock,
+} from "../src/domain/engine";
 import { enrich, normalizeInput } from "../src/providers/enrichment";
 
 
@@ -71,11 +73,6 @@ function normEnum(s: any): string {
     .normalize("NFD")
     .replace(/\p{Diacritic}/gu, ""); // remove acentos: "ALTÍSSIMO" -> "ALTISSIMO"
 }
-function hasReason(reasons: string[], target: string) {
-  const t = normEnum(target);
-  return reasons.some((r) => normEnum(r) === t);
-}
-
 // ===== Input summary =====
 function buildInputSummary(body: any): InputSummary {
   return {
@@ -249,104 +246,6 @@ async function safeInsertEnrichmentRaw(
   }
 }
 
-// ===== HARD BLOCKS (TechTrail + combo risco/prob) =====
-function detectHardBlock(enrichResult: EnrichmentResultForDecision): HardBlockResult {
-  const motivos: string[] = Array.isArray(enrichResult?.summary?.motivos) ? enrichResult.summary.motivos : [];
-
-  const hardMotivos = [
-    "NOME DIVERGENTE",
-    "CPF INVÁLIDO",
-    "CPF COM SITUAÇÃO IRREGULAR",
-    "CPF NÃO ENCONTRADO",
-    "CPF CONSTA OBITO",
-    "CPF SOCIO DE CNAE IMPEDIDO",
-    "CONSTA MANDADO DE PRISAO",
-    "CONSTAM 5 AÇÕES CIVEIS COMO AUTOR",
-    "POSSUI ACAO CRIMINAL",
-    // se a TechTrail mandar com variação mínima, o normEnum segura bem
-  ];
-
-  const hitHard = hardMotivos.filter((m) => hasReason(motivos, m));
-  const risco = normEnum(enrichResult?.summary?.riscoCredito);
-  const prob = normEnum(enrichResult?.summary?.probabilidadePagamento);
-
-  const comboHard = risco === "ALTISSIMO" && (prob === "BAIXA" || prob === "BAIXISSIMA");
-  const comboReasons = comboHard ? ["HARD_BLOCK_RISCO_PROB"] : [];
-
-  const finalReasons = [...hitHard, ...comboReasons];
-  return { isHardBlock: finalReasons.length > 0, reasons: finalReasons };
-}
-
-// ===== SCORE (parametrizável por env, com defaults) =====
-function computeScoreLocal(enrichResult: EnrichmentResultForDecision, input: InputSummary): ScoreResult {
-
-  console.log("✅ DEBUG computeScoreLocal ENTER");
-
-  const breakdown: ScoreBreakdownItem[] = [];
-  const motivos: string[] = Array.isArray(enrichResult?.summary?.motivos)
-    ? enrichResult.summary.motivos
-    : [];
-
-  console.log("motivos:", motivos);
-
-  // Divergências cadastrais (motivos)
-  const P_EMAIL = envInt("SCORE_EMAIL_DIVERGENTE", 0);
-  const P_TEL = envInt("SCORE_TELEFONE_DIVERGENTE", 0);
-  const P_CEP = envInt("SCORE_CEP_DIVERGENTE", 5);
-
-  if (hasReason(motivos, "EMAIL DIVERGENTE")) breakdown.push({ rule: "EMAIL_DIVERGENTE", points: P_EMAIL });
-  if (hasReason(motivos, "TELEFONE DIVERGENTE")) breakdown.push({ rule: "TELEFONE_DIVERGENTE", points: P_TEL });
-  if (hasReason(motivos, "CEP DIVERGENTE")) breakdown.push({ rule: "CEP_DIVERGENTE", points: P_CEP });
-
-  // riscoCredito
-  const risco = normEnum(enrichResult?.summary?.riscoCredito);
-  const riscoMap: Record<string, number> = {
-    ALTISSIMO: envInt("SCORE_RISCO_ALTISSIMO", 20),
-    ALTO: envInt("SCORE_RISCO_ALTO", 15),
-    MEDIO: envInt("SCORE_RISCO_MEDIO", 5),
-    BAIXO: envInt("SCORE_RISCO_BAIXO", 0),
-    BAIXISSIMO: envInt("SCORE_RISCO_BAIXISSIMO", 0),
-  };
-  if (risco && riscoMap[risco] !== undefined) breakdown.push({ rule: `RISCO_${risco}`, points: riscoMap[risco] });
-
-  // probabilidadePagamento (invertido) — valores vêm: ALTA / ALTÍSSIMA / MÉDIA / BAIXA / BAIXÍSSIMA
-  const prob = normEnum(enrichResult?.summary?.probabilidadePagamento);
-
-  const probMap: Record<string, number> = {
-    ALTISSIMA: envInt("SCORE_PROB_ALTISSIMA", 0),
-    ALTA: envInt("SCORE_PROB_ALTA", 0),
-    MEDIA: envInt("SCORE_PROB_MEDIA", 5),
-    BAIXA: envInt("SCORE_PROB_BAIXA", 15),
-    BAIXISSIMA: envInt("SCORE_PROB_BAIXISSIMA", 20),
-  };
-
-  if (prob && probMap[prob] !== undefined) {
-    breakdown.push({ rule: `PROB_${prob}`, points: probMap[prob] });
-  }
-
-  // quantidadeProcessos
-  const qpRaw = enrichResult?.summary?.quantidadeProcessos;
-  const qp = Number.isFinite(Number(qpRaw)) ? Number(qpRaw) : 0;
-  const P_PROC_4_5 = envInt("SCORE_PROC_4_5", 20);
-  const P_PROC_GT_5 = envInt("SCORE_PROC_GT_5", 25);
-
-  if (qp > 3 && qp <= 5) {
-  breakdown.push({ rule: "PROCESSOS_4_5", points: P_PROC_4_5 });
-  } else if (qp > 5) {
-  breakdown.push({ rule: "PROCESSOS_GT_5", points: P_PROC_GT_5 });
-  }
-
-  // valor_celular high value
-  const highMin = envInt("VALOR_CELULAR_HIGH_VALUE_MIN", 5000);
-  const highPts = envInt("SCORE_VALOR_CELULAR_HIGH_VALUE", 5);
-
-  if (typeof input.valor_celular === "number" && input.valor_celular > highMin) {
-    breakdown.push({ rule: "VALOR_CELULAR_HIGH_VALUE", points: highPts });
-  }
-
-  const score = breakdown.reduce((acc, x) => acc + x.points, 0);
-  return { score, breakdown };}
-
 function checkHardBlocks(summary: any) {
   const motivos = summary?.motivos ?? [];
 
@@ -375,14 +274,6 @@ function checkHardBlocks(summary: any) {
     reasons: hit ? [hit] : combo ? ["RISCO_ALTISSIMO_PROB_BAIXA"] : [],
   };
 }
-
-function classifyProfileByScore(score: number): Profile {
-  if (score <= 10) return "A";
-  if (score <= 25) return "B1";
-  if (score <= 45) return "B2";
-  return "C";
-}
-
 
 function computeTelemetryFlags(
   enrichResult: EnrichmentResultForDecision,
