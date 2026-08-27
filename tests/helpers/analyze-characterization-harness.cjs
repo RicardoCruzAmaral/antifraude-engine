@@ -16,6 +16,10 @@ const IMEI_INFO_PROVIDER_PATH = path.resolve(
   __dirname,
   "../../src/infrastructure/providers/imeiInfo/imeiInfoProvider.ts"
 );
+const SUPABASE_PERSISTENCE_PATH = path.resolve(
+  __dirname,
+  "../../src/infrastructure/persistence/supabase/supabasePersistence.ts"
+);
 
 const ISOLATED_ENV_NAMES = [
   "SUPABASE_URL",
@@ -101,6 +105,10 @@ function loadProviderAdaptersForCharacterization() {
   }));
 }
 
+function loadSupabasePersistenceForCharacterization() {
+  return withTypeScriptLoader(() => require(SUPABASE_PERSISTENCE_PATH));
+}
+
 function normalizeProviderInput(body) {
   return {
     ...body,
@@ -114,6 +122,11 @@ function loadAnalyzeForCharacterization(options = {}) {
     enrichment: [],
     imei: [],
     supabase: [],
+    cacheGet: [],
+    cacheSet: [],
+    decisionLog: [],
+    enrichmentRaw: [],
+    imeiRaw: [],
   };
 
   const enrichmentAdapterModule = {
@@ -151,6 +164,43 @@ function loadAnalyzeForCharacterization(options = {}) {
     },
   };
 
+  const persistence = options.persistence === null
+    ? null
+    : options.persistence?.instance ?? {
+        decisionCache: {
+          get: async (cpf) => {
+            calls.cacheGet.push(cpf);
+            if (options.persistence?.cacheGetError) throw options.persistence.cacheGetError;
+            return options.persistence?.cacheHit ?? null;
+          },
+          set: async (entry) => {
+            calls.cacheSet.push(entry);
+            if (options.persistence?.cacheSetError) throw options.persistence.cacheSetError;
+            return options.persistence?.cacheSetResult ?? new Date(Date.now() + 1000).toISOString();
+          },
+        },
+        decisionAuditRepository: {
+          saveDecision: async (row) => {
+            calls.decisionLog.push(row);
+            if (options.persistence?.decisionLogError) throw options.persistence.decisionLogError;
+          },
+        },
+        providerRawRepository: {
+          saveEnrichment: async (row) => {
+            calls.enrichmentRaw.push(row);
+            if (options.persistence?.enrichmentRawError) throw options.persistence.enrichmentRawError;
+          },
+          saveImei: async (row) => {
+            calls.imeiRaw.push(row);
+            if (options.persistence?.imeiRawError) throw options.persistence.imeiRawError;
+          },
+        },
+      };
+
+  const persistenceModule = {
+    createSupabasePersistenceOrNull: () => options.persistence === undefined ? null : persistence,
+  };
+
   const compiledModule = new Module(ANALYZE_PATH, module);
   compiledModule.filename = ANALYZE_PATH;
   compiledModule.paths = Module._nodeModulePaths(path.dirname(ANALYZE_PATH));
@@ -158,6 +208,12 @@ function loadAnalyzeForCharacterization(options = {}) {
   const defaultRequire = compiledModule.require.bind(compiledModule);
   compiledModule.require = (request) => {
     if (request === "@supabase/supabase-js") return supabaseModule;
+    if (
+      request ===
+      "../src/infrastructure/persistence/supabase/supabasePersistence"
+    ) {
+      return persistenceModule;
+    }
     if (
       request ===
       "../src/infrastructure/providers/techtrail/techTrailEnrichmentProvider"
@@ -233,7 +289,20 @@ function withMutedConsole(callback) {
   }
 }
 
-async function invokeAnalyze({ input, enrichmentResult, imeiResult, env = {} }) {
+async function withMutedConsoleAsync(callback) {
+  const originalLog = console.log;
+  const originalError = console.error;
+  console.log = () => {};
+  console.error = () => {};
+  try {
+    return await callback();
+  } finally {
+    console.log = originalLog;
+    console.error = originalError;
+  }
+}
+
+async function invokeAnalyze({ input, enrichmentResult, imeiResult, persistence, env = {} }) {
   const restoreEnvironment = isolateEnvironment({
     SUPABASE_MISSING_POLICY: "continue",
     ENRICHMENT_MODE: "mock",
@@ -254,7 +323,7 @@ async function invokeAnalyze({ input, enrichmentResult, imeiResult, env = {} }) 
   console.error = () => {};
 
   try {
-    const loaded = loadAnalyzeForCharacterization({ enrichmentResult, imeiResult });
+    const loaded = loadAnalyzeForCharacterization({ enrichmentResult, imeiResult, persistence });
     const response = {
       statusCode: null,
       body: null,
@@ -308,8 +377,10 @@ module.exports = {
   loadActiveEngineForCharacterization,
   loadAnalyzeForCharacterization,
   loadProviderAdaptersForCharacterization,
+  loadSupabasePersistenceForCharacterization,
   projectDecision,
   withIsolatedEnvironment,
   withIsolatedEnvironmentAsync,
   withMutedConsole,
+  withMutedConsoleAsync,
 };

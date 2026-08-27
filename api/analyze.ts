@@ -1,7 +1,6 @@
 // api/analyze.ts
 import type { VercelRequest, VercelResponse } from "@vercel/node";
 import crypto from "crypto";
-import { createClient } from "@supabase/supabase-js";
 import type {
   AnalysisSource,
   Decision,
@@ -18,15 +17,7 @@ import {
   techTrailEnrichmentProvider,
 } from "../src/infrastructure/providers/techtrail/techTrailEnrichmentProvider";
 import { imeiInfoProvider } from "../src/infrastructure/providers/imeiInfo/imeiInfoProvider";
-
-type CacheRow = {
-  cpf: string;
-  decision: Decision;
-  score: number | null;
-  reasons: string[];
-  rule_version: string;
-  expires_at: string;
-};
+import { createSupabasePersistenceOrNull } from "../src/infrastructure/persistence/supabase/supabasePersistence";
 
 type ImeiResult = {
   ok: boolean;
@@ -51,16 +42,6 @@ function envInt(name: string, fallback: number) {
 function envStr(name: string, fallback: string) {
   const v = process.env[name];
   return v && v.trim() ? v.trim() : fallback;
-}
-function addDaysIso(days: number) {
-  const d = new Date();
-  d.setDate(d.getDate() + days);
-  return d.toISOString();
-}
-function addSecondsIso(seconds: number) {
-  const d = new Date();
-  d.setSeconds(d.getSeconds() + seconds);
-  return d.toISOString();
 }
 function normEnum(s: any): string {
   if (!s) return "";
@@ -100,147 +81,6 @@ function mapProviderDecision(providerDecision: any): Decision {
   if (v === "ACEITO") return "APPROVE";
   if (v === "DECLINADO") return "DECLINE";
   return envStr("ENRICHMENT_FAIL_DECISION", "DECLINE") === "APPROVE" ? "APPROVE" : "DECLINE";
-}
-
-// ===== Supabase client =====
-function getSupabaseOrNull() {
-  const url = process.env.SUPABASE_URL;
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-  if (!url || !key) return null;
-
-  return createClient(url, key, { auth: { persistSession: false } });
-}
-
-// ===== Cache =====
-async function cacheGet(supabase: any, cpf: string): Promise<CacheRow | null> {
-  try {
-    const { data, error } = await supabase
-      .from("decision_cache")
-      .select("cpf, decision, score, reasons, rule_version, expires_at")
-      .eq("cpf", cpf)
-      .gt("expires_at", nowIso())
-      .maybeSingle();
-
-    if (error) throw error;
-    return data ?? null;
-  } catch (err: any) {
-    console.error("[cacheGet] failed", err);
-    return null;
-  }
-}
-
-async function cacheUpsert(
-  supabase: any,
-  input: {
-    cpf: string;
-    decision: Decision;
-    score: number | null;
-    reasons: string[];
-    ruleVersion: string;
-    ttlKind: "days" | "seconds";
-    ttlValue: number;
-    updatedAtIso: string;
-  }
-) {
-  try {
-    const expiresAt = input.ttlKind === "seconds" ? addSecondsIso(input.ttlValue) : addDaysIso(input.ttlValue);
-
-    const { error } = await supabase
-      .from("decision_cache")
-      .upsert(
-        {
-          cpf: input.cpf,
-          decision: input.decision,
-          score: input.score,
-          reasons: input.reasons,
-          rule_version: input.ruleVersion,
-          expires_at: expiresAt,
-          updated_at: input.updatedAtIso,
-        },
-        { onConflict: "cpf" }
-      );
-
-    if (error) throw error;
-    return expiresAt;
-  } catch (err: any) {
-    console.error("[cacheUpsert] failed", err);
-    return null;
-  }
-}
-
-// ===== Decision log =====
-async function safeLogDecision(
-  supabase: any,
-  row: {
-    trace_id: string;
-    cpf: string | null;
-    source: AnalysisSource;
-    cache_hit: boolean;
-    decision: Decision;
-    score: number | null;
-    reasons: string[];
-    rule_version: string;
-    input_summary: any;
-    events: any[];
-    latency_ms: number;
-  }
-) {
-  try {
-    const { error } = await supabase.from("decision_log").insert({
-      trace_id: row.trace_id,
-      cpf: row.cpf,
-      source: row.source,
-      cache_hit: row.cache_hit,
-      decision: row.decision,
-      score: row.score,
-      reasons: row.reasons,
-      rule_version: row.rule_version,
-      input_summary: row.input_summary,
-      events: row.events,
-      latency_ms: row.latency_ms,
-      created_at: nowIso(),
-    });
-    if (error) throw error;
-  } catch (err: any) {
-    console.error("[decision_log] insert failed", { trace_id: row.trace_id, err });
-  }
-}
-
-// ===== Enrichment raw =====
-async function safeInsertEnrichmentRaw(
-  supabase: any,
-  row: {
-    trace_id: string;
-    cpf: string;
-    provider: string;
-    ok: boolean;
-    mode: string;
-    http_status: number | null;
-    latency_ms: number | null;
-    request_params: any;
-    response_json: any;
-    error: any;
-  }
-) {
-  try {
-    const { error } = await supabase.from("enrichment_raw").insert({
-      trace_id: row.trace_id,
-      cpf: row.cpf,
-      provider: row.provider,
-      ok: row.ok,
-      mode: row.mode,
-      http_status: row.http_status,
-      latency_ms: row.latency_ms,
-      request_params: row.request_params,
-      response_json: row.response_json,
-      error: row.error,
-      created_at: nowIso(),
-    });
-    if (error) throw error;
-  } catch (err: any) {
-    console.error("[enrichment_raw] insert failed", { trace_id: row.trace_id, err });
-  }
 }
 
 function checkHardBlocks(summary: any) {
@@ -302,7 +142,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   let imeiResultGlobal: NormalizedImeiResult | null = null;
 
   const supabaseMissingPolicy = envStr("SUPABASE_MISSING_POLICY", "continue"); // continue | fail
-  const supabase = getSupabaseOrNull();
+  const persistence = createSupabasePersistenceOrNull();
 
   try {
     if (req.method !== "POST") {
@@ -350,7 +190,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     mark("validate_input", true);
 
-    if (!supabase) {
+    if (!persistence) {
       const msg = "Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY";
       console.error("[analyze] supabase missing", msg);
 
@@ -362,12 +202,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
 
     // ===== 1) Cache GET =====
-    let hit: CacheRow | null = null;
+    let hit = null;
     let cacheGetMs = 0;
 
-    if (supabase) {
+    if (persistence) {
       const t0 = Date.now();
-      hit = await cacheGet(supabase, cpfForLog);
+      hit = await persistence.decisionCache.get(cpfForLog);
       cacheGetMs = Date.now() - t0;
       mark("cache_get", true, { hit: !!hit, cacheGetMs });
     } else {
@@ -380,7 +220,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       finalDecision = hit.decision;
       finalScore = hit.score;
       finalReasons = hit.reasons;
-      finalRuleVersion = hit.rule_version;
+      finalRuleVersion = hit.ruleVersion;
 
       const totalMs = Date.now() - started;
       mark("response_sent", true, { source: "cache" });
@@ -399,19 +239,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         fingerprint: fingerprintSnapshot,
       };
 
-      if (supabase) {
-        await safeLogDecision(supabase, {
-          trace_id: traceId,
+      if (persistence) {
+        await persistence.decisionAuditRepository.saveDecision({
+          traceId,
           cpf: cpfForLog,
           source: finalSource,
-          cache_hit: true,
+          cacheHit: true,
           decision: finalDecision,
           score: finalScore,
           reasons: finalReasons,
-          rule_version: finalRuleVersion,
-          input_summary,
+          ruleVersion: finalRuleVersion,
+          inputSummary: input_summary,
           events,
-          latency_ms: totalMs,
+          latencyMs: totalMs,
         });
       }
 
@@ -465,17 +305,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     });
 
     // ===== 3) enrichment_raw =====
-    if (supabase) {
-      await safeInsertEnrichmentRaw(supabase, {
-        trace_id: traceId,
+    if (persistence) {
+      await persistence.providerRawRepository.saveEnrichment({
+        traceId,
         cpf: cpfForLog,
         provider: enrichResult?.provider ?? "unknown",
         ok: !!enrichResult?.ok,
         mode: enrichResult?.mode ?? mode,
-        http_status: enrichResult?.httpStatus ?? null,
-        latency_ms: enrichResult?.ms ?? enrichMs,
-        request_params: enrichResult?.requestParams ?? null,
-        response_json: enrichResult?.raw ?? null,
+        httpStatus: enrichResult?.httpStatus ?? null,
+        latencyMs: enrichResult?.ms ?? enrichMs,
+        requestParams: enrichResult?.requestParams ?? null,
+        responseJson: enrichResult?.raw ?? null,
         error: enrichResult?.ok ? null : enrichResult?.error ?? { msg: "ENRICHMENT_FAILED" },
       });
       mark("enrichment_raw_saved", true);
@@ -545,30 +385,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
           imeiResultGlobal = imeiResult;
 
-          if (supabase && imeiResult) {
-            try {
-              await supabase.from("imei_raw").insert({
-                trace_id: traceId,
-                cpf: cpfForLog,
-                provider: imeiResult.provider,
-                ok: imeiResult.ok,
-                http_status: imeiResult.httpStatus ?? null,
-                latency_ms: imeiResult.ms ?? null,
-                service_id: imeiResult.serviceId ?? null,
-                brand_expected: imeiResult.brandExpected ?? null,
-                brand_returned: imeiResult.brandReturned ?? null,
-                reason: imeiResult.reason,
-                request_params: {
-                  imeiCode: input_summary?.imeiCode ?? null,
-                  modeloDeclarado: input_summary?.modelo_declarado ?? null,
-                },
-                summary_json: imeiResult.summary ?? null,
-                response_json: imeiResult.raw ?? null,
-                created_at: new Date().toISOString(),
-              });
-            } catch (err) {
-              console.error("[imei_raw] insert failed", err);
-            }
+          if (persistence && imeiResult) {
+            await persistence.providerRawRepository.saveImei({
+              traceId,
+              cpf: cpfForLog,
+              imeiCode: input_summary?.imeiCode ?? null,
+              modeloDeclarado: input_summary?.modelo_declarado ?? null,
+              result: imeiResult,
+            });
           }
 
           mark("imei_check_done", imeiResult.ok, {
@@ -641,9 +465,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     let expiresAt: string | null = null;
 
-    if (supabase) {
+    if (persistence) {
       const cacheSetStarted = Date.now();
-      expiresAt = await cacheUpsert(supabase, {
+      expiresAt = await persistence.decisionCache.set({
         cpf: cpfForLog,
         decision,
         score,
@@ -701,19 +525,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     };
 
     // ===== 7) LOG ÚNICO =====
-    if (supabase) {
-      await safeLogDecision(supabase, {
-        trace_id: traceId,
+    if (persistence) {
+      await persistence.decisionAuditRepository.saveDecision({
+        traceId,
         cpf: cpfForLog,
         source: finalSource,
-        cache_hit: finalCacheHit,
+        cacheHit: finalCacheHit,
         decision: finalDecision,
         score: finalScore,
         reasons: finalReasons,
-        rule_version: finalRuleVersion,
-        input_summary,
+        ruleVersion: finalRuleVersion,
+        inputSummary: input_summary,
         events,
-        latency_ms: totalMs,
+        latencyMs: totalMs,
       });
     }
 

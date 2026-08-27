@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "type": "commonjs",
   "scripts": {
-    "test": "node --test tests/characterization/engine-rules.test.cjs tests/characterization/analyze-imei.test.cjs tests/golden-master/current-engine-v1.test.cjs",
+    "test": "node --test tests/characterization/engine-rules.test.cjs tests/characterization/analyze-imei.test.cjs tests/characterization/analyze-persistence.test.cjs tests/golden-master/current-engine-v1.test.cjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
