@@ -2,13 +2,17 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const {
-  loadAnalyzeForCharacterization,
+  loadActiveEngineForCharacterization,
   withIsolatedEnvironment,
   withMutedConsole,
 } = require("../helpers/analyze-characterization-harness.cjs");
+const {
+  SYNTHETIC_INPUT,
+  enrichmentSummary,
+  imeiResult,
+} = require("../helpers/synthetic-fixtures.cjs");
 
-const { exports: analyzeExports } = loadAnalyzeForCharacterization();
-const rules = analyzeExports.__characterization;
+const rules = loadActiveEngineForCharacterization();
 
 function computeScore(summary, valor_celular = null, env = {}) {
   return withIsolatedEnvironment(env, () =>
@@ -16,6 +20,17 @@ function computeScore(summary, valor_celular = null, env = {}) {
       rules.computeScoreLocal(
         { summary: { motivos: [], ...summary } },
         { valor_celular }
+      )
+    )
+  );
+}
+
+function runPreEvaluation(summary, input = SYNTHETIC_INPUT, env = {}) {
+  return withIsolatedEnvironment(env, () =>
+    withMutedConsole(() =>
+      rules.preEvaluate(
+        { ok: true, summary: { motivos: [], ...summary } },
+        input
       )
     )
   );
@@ -182,4 +197,147 @@ test("limites exatos e um ponto acima de cada perfil", () => {
   for (const [score, expected] of cases) {
     assert.equal(rules.classifyProfileByScore(score), expected);
   }
+});
+
+test("pre-evaluation reúne hard block, score base, breakdown e telemetry flags", () => {
+  const result = runPreEvaluation(
+    {
+      motivos: ["EMAIL DIVERGENTE"],
+      riscoCredito: "MÉDIO",
+      probabilidadePagamento: "ALTA",
+      quantidadeProcessos: 4,
+    },
+    {
+      ...SYNTHETIC_INPUT,
+      device: { ...SYNTHETIC_INPUT.device, isMobile: false },
+    }
+  );
+
+  assert.deepEqual(result, {
+    hardBlock: { isHardBlock: false, reasons: [] },
+    baseScore: 25,
+    scoreBreakdown: [
+      { rule: "EMAIL_DIVERGENTE", points: 0 },
+      { rule: "RISCO_MEDIO", points: 5 },
+      { rule: "PROB_ALTA", points: 0 },
+      { rule: "PROCESSOS_4_5", points: 20 },
+    ],
+    telemetryFlags: {
+      nonMobile: true,
+      emailDivergente: true,
+      telefoneDivergente: false,
+      cepDivergente: false,
+      riscoCredito: "MÉDIO",
+      probabilidadePagamento: "ALTA",
+      quantidadeProcessos: 4,
+    },
+  });
+});
+
+test("pre-evaluation de hard block mantém score null e não calcula flags", () => {
+  assert.deepEqual(
+    runPreEvaluation({ motivos: ["NOME DIVERGENTE"] }),
+    {
+      hardBlock: { isHardBlock: true, reasons: ["NOME DIVERGENTE"] },
+      baseScore: null,
+      scoreBreakdown: [],
+      telemetryFlags: null,
+    }
+  );
+});
+
+test("final evaluation de hard block ignora resultado IMEI", () => {
+  const preEvaluation = runPreEvaluation({
+    motivos: ["NOME DIVERGENTE"],
+  });
+
+  assert.deepEqual(
+    rules.finalizeEvaluation(
+      preEvaluation,
+      imeiResult("IMEI_INVALID"),
+      99
+    ),
+    {
+      hardBlock: { isHardBlock: true, reasons: ["NOME DIVERGENTE"] },
+      score: null,
+      scoreBreakdown: [],
+      reasons: ["NOME DIVERGENTE"],
+      profile: null,
+      decision: "DECLINE",
+    }
+  );
+});
+
+test("final evaluation aplica somente os motivos IMEI atuais sem mutar a pré-avaliação", () => {
+  const preEvaluation = runPreEvaluation({
+    riscoCredito: "BAIXISSIMO",
+    probabilidadePagamento: "ALTISSIMA",
+  });
+  const originalPreEvaluation = structuredClone(preEvaluation);
+  const baseBreakdown = [
+    { rule: "RISCO_BAIXISSIMO", points: 0 },
+    { rule: "PROB_ALTISSIMA", points: 0 },
+  ];
+
+  for (const reason of [
+    "IMEI_OK",
+    "IMEI_INVALID",
+    "IMEI_FAIL",
+    "IMEI_BRAND_MISMATCH",
+  ]) {
+    const hasPenalty = reason !== "IMEI_OK";
+    const result = rules.finalizeEvaluation(
+      preEvaluation,
+      imeiResult(reason),
+      7
+    );
+    const expectedBreakdown = hasPenalty
+      ? [...baseBreakdown, { rule: reason, points: 7 }]
+      : baseBreakdown;
+
+    assert.deepEqual(result, {
+      hardBlock: { isHardBlock: false, reasons: [] },
+      score: hasPenalty ? 7 : 0,
+      scoreBreakdown: expectedBreakdown,
+      reasons: expectedBreakdown.map((item) => item.rule),
+      profile: "A",
+      decision: "APPROVE",
+    });
+    assert.deepEqual(preEvaluation, originalPreEvaluation);
+  }
+
+  assert.deepEqual(
+    rules.finalizeEvaluation(
+      preEvaluation,
+      imeiResult("IMEI_INVALID"),
+      0
+    ).scoreBreakdown,
+    [...baseBreakdown, { rule: "IMEI_INVALID", points: 0 }]
+  );
+});
+
+test("final evaluation aplica IMEI antes do perfil e pode cruzar para C", () => {
+  const preEvaluation = runPreEvaluation({
+    riscoCredito: "ALTISSIMO",
+    probabilidadePagamento: "MEDIA",
+    quantidadeProcessos: 4,
+  });
+
+  assert.equal(preEvaluation.baseScore, 45);
+
+  const result = rules.finalizeEvaluation(
+    preEvaluation,
+    imeiResult("IMEI_FAIL"),
+    5
+  );
+
+  assert.equal(result.score, 50);
+  assert.equal(result.profile, "C");
+  assert.equal(result.decision, "DECLINE");
+  assert.deepEqual(result.reasons, [
+    "RISCO_ALTISSIMO",
+    "PROB_MEDIA",
+    "PROCESSOS_4_5",
+    "IMEI_FAIL",
+  ]);
 });

@@ -16,6 +16,10 @@ export type {
   ProviderDecision,
 } from "./enrichment";
 export type {
+  FinalEvaluationResult,
+  PreEvaluationResult,
+} from "./evaluation";
+export type {
   DeviceFingerprintInput,
   InputSummary,
 } from "./input";

@@ -4,6 +4,10 @@ const path = require("node:path");
 const ts = require("typescript");
 
 const ANALYZE_PATH = path.resolve(__dirname, "../../api/analyze.ts");
+const ACTIVE_ENGINE_PATH = path.resolve(
+  __dirname,
+  "../../src/domain/engine/index.ts"
+);
 
 const ISOLATED_ENV_NAMES = [
   "SUPABASE_URL",
@@ -39,16 +43,40 @@ const ISOLATED_ENV_NAMES = [
 
 function transpileAnalyzeForCharacterization() {
   const source = fs.readFileSync(ANALYZE_PATH, "utf8");
-  const instrumentedSource = `${source}\nexport const __characterization = {\n  detectHardBlock,\n  computeScoreLocal,\n  classifyProfileByScore,\n  computeTelemetryFlags,\n};\n`;
+  return transpileTypeScript(source, ANALYZE_PATH);
+}
 
-  return ts.transpileModule(instrumentedSource, {
-    fileName: ANALYZE_PATH,
+function transpileTypeScript(source, fileName) {
+  return ts.transpileModule(source, {
+    fileName,
     compilerOptions: {
       target: ts.ScriptTarget.ES2020,
       module: ts.ModuleKind.CommonJS,
       esModuleInterop: true,
     },
   }).outputText;
+}
+
+function withTypeScriptLoader(callback) {
+  const originalTypeScriptLoader = Module._extensions[".ts"];
+  Module._extensions[".ts"] = (loadedModule, filename) => {
+    const source = fs.readFileSync(filename, "utf8");
+    loadedModule._compile(transpileTypeScript(source, filename), filename);
+  };
+
+  try {
+    return callback();
+  } finally {
+    if (originalTypeScriptLoader) {
+      Module._extensions[".ts"] = originalTypeScriptLoader;
+    } else {
+      delete Module._extensions[".ts"];
+    }
+  }
+}
+
+function loadActiveEngineForCharacterization() {
+  return withTypeScriptLoader(() => require(ACTIVE_ENGINE_PATH));
 }
 
 function normalizeProviderInput(body) {
@@ -109,29 +137,9 @@ function loadAnalyzeForCharacterization(options = {}) {
     return defaultRequire(request);
   };
 
-  const originalTypeScriptLoader = Module._extensions[".ts"];
-  Module._extensions[".ts"] = (loadedModule, filename) => {
-    const source = fs.readFileSync(filename, "utf8");
-    const output = ts.transpileModule(source, {
-      fileName: filename,
-      compilerOptions: {
-        target: ts.ScriptTarget.ES2020,
-        module: ts.ModuleKind.CommonJS,
-        esModuleInterop: true,
-      },
-    }).outputText;
-    loadedModule._compile(output, filename);
-  };
-
-  try {
+  withTypeScriptLoader(() => {
     compiledModule._compile(transpileAnalyzeForCharacterization(), ANALYZE_PATH);
-  } finally {
-    if (originalTypeScriptLoader) {
-      Module._extensions[".ts"] = originalTypeScriptLoader;
-    } else {
-      delete Module._extensions[".ts"];
-    }
-  }
+  });
   return { exports: compiledModule.exports, calls };
 }
 
@@ -252,6 +260,7 @@ function projectDecision(body) {
 
 module.exports = {
   invokeAnalyze,
+  loadActiveEngineForCharacterization,
   loadAnalyzeForCharacterization,
   projectDecision,
   withIsolatedEnvironment,

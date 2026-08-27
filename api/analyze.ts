@@ -5,16 +5,13 @@ import { createClient } from "@supabase/supabase-js";
 import type {
   AnalysisSource,
   Decision,
-  EnrichmentResultForDecision,
   InputSummary,
   NormalizedImeiResult,
   ScoreBreakdownItem,
-  TelemetryFlags,
 } from "../src/domain/contracts";
 import {
-  classifyProfileByScore,
-  computeScoreLocal,
-  detectHardBlock,
+  finalizeEvaluation,
+  preEvaluate,
 } from "../src/domain/engine";
 import { enrich, normalizeInput } from "../src/providers/enrichment";
 
@@ -275,34 +272,6 @@ function checkHardBlocks(summary: any) {
   };
 }
 
-function computeTelemetryFlags(
-  enrichResult: EnrichmentResultForDecision,
-  input: InputSummary
-): TelemetryFlags {
-  const motivos = Array.isArray(enrichResult?.summary?.motivos)
-    ? enrichResult.summary.motivos
-    : [];
-
-  return {
-    // hard blocks do fingerprint (quando você ligar)
-    nonMobile: input?.device?.isMobile === false,
-
-    // divergências básicas (se a techtrail mandar como motivo)
-    emailDivergente: motivos.includes("EMAIL DIVERGENTE"),
-    telefoneDivergente: motivos.includes("TELEFONE DIVERGENTE"),
-    cepDivergente: motivos.includes("CEP DIVERGENTE"),
-
-    // risco (se vier no summary)
-    riscoCredito: enrichResult?.summary?.riscoCredito ?? null,
-    probabilidadePagamento: enrichResult?.summary?.probabilidadePagamento ?? null,
-
-    // processos
-    quantidadeProcessos: enrichResult?.summary?.quantidadeProcessos ?? null,
-  };
-}
-
-
-
 // ===== Handler =====
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const started = Date.now();
@@ -525,127 +494,119 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     let isHardBlock = false;
 
     if (enrichResult?.ok && enrichResult?.summary) {
-      // 4.1 Hard block logo após enriquecimento
-      const hb = detectHardBlock(enrichResult);
-      isHardBlock = hb.isHardBlock;
+      const preEvaluation = preEvaluate(enrichResult, input_summary!);
+      isHardBlock = preEvaluation.hardBlock.isHardBlock;
 
       mark("hard_block_check", true, {
         isHardBlock,
-        reasons: hb.reasons,
+        reasons: preEvaluation.hardBlock.reasons,
       });
 
       if (isHardBlock) {
-        decision = "DECLINE";
-        reasons = hb.reasons;
-        score = null;
-        scoreBreakdown = [];
+        const finalEvaluation = finalizeEvaluation(
+          preEvaluation,
+          null,
+          0
+        );
+
+        decision = finalEvaluation.decision;
+        reasons = finalEvaluation.reasons;
+        score = finalEvaluation.score;
+        scoreBreakdown = finalEvaluation.scoreBreakdown;
       } else {
-    // 4.2 Score
-    console.log("🟦 about to call computeScoreLocal");
-    const s = computeScoreLocal(enrichResult, input_summary!);
-    console.log("🟩 returned from computeScoreLocal", s);
+        score = preEvaluation.baseScore;
+        scoreBreakdown = preEvaluation.scoreBreakdown;
+        const flags = preEvaluation.telemetryFlags!;
 
-    // 🔒 GARANTIAS
-    score = Number.isFinite(s?.score) ? s.score : 0;
-    scoreBreakdown = Array.isArray(s?.breakdown) ? s.breakdown : [];
+        const scoreComputedMeta = {
+          score,
+          breakdown: scoreBreakdown,
+          flags,
+        };
+        mark("score_computed", true, scoreComputedMeta);
 
-    // ✅ FLAGS
-    const flags = computeTelemetryFlags(enrichResult, input_summary!);
+        // 4.3 IMEI opcional
+        const imeiTimeoutMs = envInt("IMEI_TIMEOUT_MS", 20000);
+        const imeiPenalty = envInt("SCORE_IMEI_PROBLEM", 5);
 
-    mark("score_computed", true, {
-      score,
-      breakdown: scoreBreakdown,
-      flags,
-    });
+        let imeiResult: NormalizedImeiResult | null = null;
 
-    // 4.3 IMEI opcional
-    const imeiTimeoutMs = envInt("IMEI_TIMEOUT_MS", 20000);
-    const imeiPenalty = envInt("SCORE_IMEI_PROBLEM", 5);
-
-    let imeiResult: NormalizedImeiResult | null = null;
-
-    if (input_summary?.imeiCode) {
-      mark("imei_check_start", true, {
-        hasImei: true,
-        modeloDeclarado: input_summary?.modelo_declarado ?? null,
-      });
-
-      imeiResult = await imeiCheckReal({
-        imeiCode: input_summary.imeiCode,
-        modeloDeclarado: input_summary.modelo_declarado,
-        timeoutMs: imeiTimeoutMs,
-      });
-
-      imeiResultGlobal = imeiResult;
-
-      if (supabase && imeiResult) {
-        try {
-          await supabase.from("imei_raw").insert({
-            trace_id: traceId,
-            cpf: cpfForLog,
-            provider: imeiResult.provider,
-            ok: imeiResult.ok,
-            http_status: imeiResult.httpStatus ?? null,
-            latency_ms: imeiResult.ms ?? null,
-            service_id: imeiResult.serviceId ?? null,
-            brand_expected: imeiResult.brandExpected ?? null,
-            brand_returned: imeiResult.brandReturned ?? null,
-            reason: imeiResult.reason,
-            request_params: {
-              imeiCode: input_summary?.imeiCode ?? null,
-              modeloDeclarado: input_summary?.modelo_declarado ?? null,
-            },
-            summary_json: imeiResult.summary ?? null,
-            response_json: imeiResult.raw ?? null,
-            created_at: new Date().toISOString(),
+        if (input_summary?.imeiCode) {
+          mark("imei_check_start", true, {
+            hasImei: true,
+            modeloDeclarado: input_summary?.modelo_declarado ?? null,
           });
-        } catch (err) {
-          console.error("[imei_raw] insert failed", err);
+
+          imeiResult = await imeiCheckReal({
+            imeiCode: input_summary.imeiCode,
+            modeloDeclarado: input_summary.modelo_declarado,
+            timeoutMs: imeiTimeoutMs,
+          });
+
+          imeiResultGlobal = imeiResult;
+
+          if (supabase && imeiResult) {
+            try {
+              await supabase.from("imei_raw").insert({
+                trace_id: traceId,
+                cpf: cpfForLog,
+                provider: imeiResult.provider,
+                ok: imeiResult.ok,
+                http_status: imeiResult.httpStatus ?? null,
+                latency_ms: imeiResult.ms ?? null,
+                service_id: imeiResult.serviceId ?? null,
+                brand_expected: imeiResult.brandExpected ?? null,
+                brand_returned: imeiResult.brandReturned ?? null,
+                reason: imeiResult.reason,
+                request_params: {
+                  imeiCode: input_summary?.imeiCode ?? null,
+                  modeloDeclarado: input_summary?.modelo_declarado ?? null,
+                },
+                summary_json: imeiResult.summary ?? null,
+                response_json: imeiResult.raw ?? null,
+                created_at: new Date().toISOString(),
+              });
+            } catch (err) {
+              console.error("[imei_raw] insert failed", err);
+            }
+          }
+
+          mark("imei_check_done", imeiResult.ok, {
+            reason: imeiResult.reason,
+            provider: imeiResult.provider,
+            ms: imeiResult.ms,
+            brandExpected: imeiResult.brandExpected ?? null,
+            brandReturned: imeiResult.brandReturned ?? null,
+            serviceId: imeiResult.serviceId ?? null,
+            imeiSummary: imeiResult.summary ?? null,
+          });
+        } else {
+          mark("imei_check_skipped", true, { reason: "missing_imei" });
         }
-      }
 
-      mark("imei_check_done", imeiResult.ok, {
-        reason: imeiResult.reason,
-        provider: imeiResult.provider,
-        ms: imeiResult.ms,
-        brandExpected: imeiResult.brandExpected ?? null,
-        brandReturned: imeiResult.brandReturned ?? null,
-        serviceId: imeiResult.serviceId ?? null,
-        imeiSummary: imeiResult.summary ?? null,
-      });
+        const finalEvaluation = finalizeEvaluation(
+          preEvaluation,
+          imeiResult,
+          imeiPenalty
+        );
 
-      if (
-        imeiResult.reason === "IMEI_INVALID" ||
-        imeiResult.reason === "IMEI_FAIL" ||
-        imeiResult.reason === "IMEI_BRAND_MISMATCH"
-      ) {
-        score += imeiPenalty;
-        scoreBreakdown.push({
-          rule: imeiResult.reason,
-          points: imeiPenalty,
+        decision = finalEvaluation.decision;
+        reasons = finalEvaluation.reasons;
+        score = finalEvaluation.score;
+        scoreBreakdown = finalEvaluation.scoreBreakdown;
+        const profile = finalEvaluation.profile;
+
+        // Preserva o breakdown final observado no evento já registrado.
+        scoreComputedMeta.breakdown = scoreBreakdown;
+
+        mark("decision_profiled", true, {
+          profile,
+          decision,
+          score,
+          flags,
+          imeiReason: imeiResult?.reason ?? null,
         });
       }
-    } else {
-      mark("imei_check_skipped", true, { reason: "missing_imei" });
-    }
-
-    // 4.4 Perfil
-    const safeScore = score ?? 0;
-    const profile = classifyProfileByScore(safeScore);
-
-    // 4.5 Decisão por perfil
-    decision = profile === "C" ? "DECLINE" : "APPROVE";
-
-    reasons = scoreBreakdown.map((b) => b.rule);
-
-    mark("decision_profiled", true, {
-      profile,
-      decision,
-      score,
-      flags,
-      imeiReason: imeiResult?.reason ?? null,
-    });
-    }
     } else {
       // 4.5 Falha técnica
       isTechFail = true;

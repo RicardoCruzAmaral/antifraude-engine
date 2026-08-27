@@ -38,6 +38,28 @@ for (const reason of [
     assert.equal(result.calls.enrichment.length, 1);
     assert.equal(result.calls.imei.length, 1);
     assert.equal(result.body.imei.reason, reason);
+    assert.deepEqual(
+      result.body.events.map((event) => event.step),
+      [
+        "request_received",
+        "fingerprint_snapshot",
+        "input_summary_built",
+        "validate_input",
+        "supabase_missing_continue",
+        "cache_get_skipped_no_supabase",
+        "enrichment_start",
+        "enrichment_done",
+        "enrichment_raw_skipped_no_supabase",
+        "hard_block_check",
+        "score_computed",
+        "imei_check_start",
+        "imei_check_done",
+        "decision_profiled",
+        "decision_made",
+        "cache_set_skipped_no_supabase",
+        "response_sent",
+      ]
+    );
     assert.deepEqual(projectDecision(result.body), {
       decision: "APPROVE",
       score: hasPenalty ? 5 : 0,
@@ -46,8 +68,35 @@ for (const reason of [
       profile: "A",
       hardBlock: { isHardBlock: false, reasons: [] },
     });
+
+    const scoreComputedEvent = result.body.events.find(
+      (event) => event.step === "score_computed"
+    );
+    assert.equal(scoreComputedEvent.meta.score, 0);
+    assert.deepEqual(scoreComputedEvent.meta.breakdown, expectedBreakdown);
   });
 }
+
+test("SCORE_IMEI_PROBLEM continua configurando a penalidade do handler", async () => {
+  const result = await invokeAnalyze({
+    input: { ...SYNTHETIC_INPUT, imeiCode: "000000000000000" },
+    enrichmentResult: enrichmentResult(enrichmentSummary()),
+    imeiResult: imeiResult("IMEI_INVALID"),
+    env: { SCORE_IMEI_PROBLEM: "7" },
+  });
+
+  assert.deepEqual(projectDecision(result.body), {
+    decision: "APPROVE",
+    score: 7,
+    reasons: ["RISCO_BAIXISSIMO", "PROB_ALTISSIMA", "IMEI_INVALID"],
+    scoreBreakdown: [
+      ...expectedBaseBreakdown,
+      { rule: "IMEI_INVALID", points: 7 },
+    ],
+    profile: "A",
+    hardBlock: { isHardBlock: false, reasons: [] },
+  });
+});
 
 test("hard block textual pula a chamada IMEI", async () => {
   const result = await invokeAnalyze({
@@ -59,6 +108,24 @@ test("hard block textual pula a chamada IMEI", async () => {
   });
 
   assert.equal(result.calls.imei.length, 0);
+  assert.deepEqual(
+    result.body.events.map((event) => event.step),
+    [
+      "request_received",
+      "fingerprint_snapshot",
+      "input_summary_built",
+      "validate_input",
+      "supabase_missing_continue",
+      "cache_get_skipped_no_supabase",
+      "enrichment_start",
+      "enrichment_done",
+      "enrichment_raw_skipped_no_supabase",
+      "hard_block_check",
+      "decision_made",
+      "cache_set_skipped_no_supabase",
+      "response_sent",
+    ]
+  );
   assert.deepEqual(projectDecision(result.body), {
     decision: "DECLINE",
     score: null,
@@ -88,6 +155,41 @@ test("fingerprint sintético é devolvido, mas não altera score ou decisão", a
   assert.equal(result.body.fingerprint.isMobile, false);
   assert.equal(result.body.score, 0);
   assert.equal(result.body.decision, "APPROVE");
+  assert.equal(result.calls.imei.length, 0);
+  assert.deepEqual(
+    result.body.events.map((event) => event.step),
+    [
+      "request_received",
+      "fingerprint_snapshot",
+      "input_summary_built",
+      "validate_input",
+      "supabase_missing_continue",
+      "cache_get_skipped_no_supabase",
+      "enrichment_start",
+      "enrichment_done",
+      "enrichment_raw_skipped_no_supabase",
+      "hard_block_check",
+      "score_computed",
+      "imei_check_skipped",
+      "decision_profiled",
+      "decision_made",
+      "cache_set_skipped_no_supabase",
+      "response_sent",
+    ]
+  );
+
+  const scoreComputedEvent = result.body.events.find(
+    (event) => event.step === "score_computed"
+  );
+  assert.deepEqual(scoreComputedEvent.meta.flags, {
+    nonMobile: true,
+    emailDivergente: false,
+    telefoneDivergente: false,
+    cepDivergente: false,
+    riscoCredito: "BAIXISSIMO",
+    probabilidadePagamento: "ALTISSIMA",
+    quantidadeProcessos: 0,
+  });
 });
 
 test("decisão DECLINADO do enrichment não é usada pela decisão final", async () => {
