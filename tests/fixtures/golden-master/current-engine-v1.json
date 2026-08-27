@@ -1,0 +1,212 @@
+{
+  "schemaVersion": 1,
+  "baseline": "api/analyze.ts:score-v1",
+  "description": "Fixtures integralmente sintéticas do comportamento legado. Não regenerar automaticamente.",
+  "environment": {
+    "mode": "code-defaults",
+    "description": "Todas as variáveis decisórias são limpas; os fallbacks literais do código são exercitados.",
+    "overrides": {}
+  },
+  "syntheticBaseInput": {
+    "cpf": "00000000000",
+    "nome": "PESSOA SINTETICA DE TESTE",
+    "email": "characterization@example.invalid",
+    "telefone_contato": "00000000000",
+    "valor_celular": 0,
+    "cep": "00000000",
+    "modelo_declarado": "TEST DEVICE",
+    "partnerCode": "TEST_PARTNER",
+    "salesChannel": "TEST_CHANNEL",
+    "proposalId": "TEST_PROPOSAL_0001",
+    "sessionId": "TEST_SESSION_0001",
+    "device": {
+      "ip": "192.0.2.1",
+      "visitorId": "synthetic-test-visitor",
+      "os": "TestOS",
+      "isMobile": true,
+      "fingerprintProvider": "synthetic-test-provider"
+    }
+  },
+  "cases": [
+    {
+      "id": "profile-A-low-score",
+      "inputOverrides": {},
+      "summary": {
+        "motivos": [],
+        "riscoCredito": "BAIXISSIMO",
+        "probabilidadePagamento": "ALTISSIMA",
+        "quantidadeProcessos": 0
+      },
+      "imeiResult": null,
+      "expected": {
+        "decision": "APPROVE",
+        "score": 0,
+        "reasons": ["RISCO_BAIXISSIMO", "PROB_ALTISSIMA"],
+        "scoreBreakdown": [
+          { "rule": "RISCO_BAIXISSIMO", "points": 0 },
+          { "rule": "PROB_ALTISSIMA", "points": 0 }
+        ],
+        "profile": "A",
+        "hardBlock": { "isHardBlock": false, "reasons": [] }
+      }
+    },
+    {
+      "id": "profile-B1",
+      "inputOverrides": {},
+      "summary": {
+        "motivos": [],
+        "riscoCredito": "ALTO",
+        "probabilidadePagamento": "ALTISSIMA",
+        "quantidadeProcessos": 0
+      },
+      "imeiResult": null,
+      "expected": {
+        "decision": "APPROVE",
+        "score": 15,
+        "reasons": ["RISCO_ALTO", "PROB_ALTISSIMA"],
+        "scoreBreakdown": [
+          { "rule": "RISCO_ALTO", "points": 15 },
+          { "rule": "PROB_ALTISSIMA", "points": 0 }
+        ],
+        "profile": "B1",
+        "hardBlock": { "isHardBlock": false, "reasons": [] }
+      }
+    },
+    {
+      "id": "profile-B2",
+      "inputOverrides": {},
+      "summary": {
+        "motivos": [],
+        "riscoCredito": "ALTO",
+        "probabilidadePagamento": "BAIXA",
+        "quantidadeProcessos": 0
+      },
+      "imeiResult": null,
+      "expected": {
+        "decision": "APPROVE",
+        "score": 30,
+        "reasons": ["RISCO_ALTO", "PROB_BAIXA"],
+        "scoreBreakdown": [
+          { "rule": "RISCO_ALTO", "points": 15 },
+          { "rule": "PROB_BAIXA", "points": 15 }
+        ],
+        "profile": "B2",
+        "hardBlock": { "isHardBlock": false, "reasons": [] }
+      }
+    },
+    {
+      "id": "profile-C",
+      "inputOverrides": {},
+      "summary": {
+        "motivos": [],
+        "riscoCredito": "ALTO",
+        "probabilidadePagamento": "BAIXISSIMA",
+        "quantidadeProcessos": 6
+      },
+      "imeiResult": null,
+      "expected": {
+        "decision": "DECLINE",
+        "score": 60,
+        "reasons": ["RISCO_ALTO", "PROB_BAIXISSIMA", "PROCESSOS_GT_5"],
+        "scoreBreakdown": [
+          { "rule": "RISCO_ALTO", "points": 15 },
+          { "rule": "PROB_BAIXISSIMA", "points": 20 },
+          { "rule": "PROCESSOS_GT_5", "points": 25 }
+        ],
+        "profile": "C",
+        "hardBlock": { "isHardBlock": false, "reasons": [] }
+      }
+    },
+    {
+      "id": "textual-hard-block",
+      "inputOverrides": {},
+      "summary": {
+        "motivos": ["NOME DIVERGENTE"],
+        "riscoCredito": "BAIXISSIMO",
+        "probabilidadePagamento": "ALTISSIMA",
+        "quantidadeProcessos": 0
+      },
+      "imeiResult": null,
+      "expected": {
+        "decision": "DECLINE",
+        "score": null,
+        "reasons": ["NOME DIVERGENTE"],
+        "scoreBreakdown": [],
+        "profile": null,
+        "hardBlock": { "isHardBlock": true, "reasons": ["NOME DIVERGENTE"] }
+      }
+    },
+    {
+      "id": "risk-probability-hard-block-low",
+      "inputOverrides": {},
+      "summary": {
+        "motivos": [],
+        "riscoCredito": "ALTISSIMO",
+        "probabilidadePagamento": "BAIXA",
+        "quantidadeProcessos": 0
+      },
+      "imeiResult": null,
+      "expected": {
+        "decision": "DECLINE",
+        "score": null,
+        "reasons": ["HARD_BLOCK_RISCO_PROB"],
+        "scoreBreakdown": [],
+        "profile": null,
+        "hardBlock": { "isHardBlock": true, "reasons": ["HARD_BLOCK_RISCO_PROB"] }
+      }
+    },
+    {
+      "id": "risk-probability-hard-block-very-low",
+      "inputOverrides": {},
+      "summary": {
+        "motivos": [],
+        "riscoCredito": "ALTISSIMO",
+        "probabilidadePagamento": "BAIXISSIMA",
+        "quantidadeProcessos": 0
+      },
+      "imeiResult": null,
+      "expected": {
+        "decision": "DECLINE",
+        "score": null,
+        "reasons": ["HARD_BLOCK_RISCO_PROB"],
+        "scoreBreakdown": [],
+        "profile": null,
+        "hardBlock": { "isHardBlock": true, "reasons": ["HARD_BLOCK_RISCO_PROB"] }
+      }
+    },
+    {
+      "id": "imei-penalty-crosses-C-boundary",
+      "inputOverrides": {
+        "valor_celular": 5001,
+        "imeiCode": "000000000000000"
+      },
+      "summary": {
+        "motivos": ["CEP DIVERGENTE"],
+        "riscoCredito": "ALTO",
+        "probabilidadePagamento": "BAIXISSIMA",
+        "quantidadeProcessos": 0
+      },
+      "imeiResult": "IMEI_INVALID",
+      "expected": {
+        "decision": "DECLINE",
+        "score": 50,
+        "reasons": [
+          "CEP_DIVERGENTE",
+          "RISCO_ALTO",
+          "PROB_BAIXISSIMA",
+          "VALOR_CELULAR_HIGH_VALUE",
+          "IMEI_INVALID"
+        ],
+        "scoreBreakdown": [
+          { "rule": "CEP_DIVERGENTE", "points": 5 },
+          { "rule": "RISCO_ALTO", "points": 15 },
+          { "rule": "PROB_BAIXISSIMA", "points": 20 },
+          { "rule": "VALOR_CELULAR_HIGH_VALUE", "points": 5 },
+          { "rule": "IMEI_INVALID", "points": 5 }
+        ],
+        "profile": "C",
+        "hardBlock": { "isHardBlock": false, "reasons": [] }
+      }
+    }
+  ]
+}

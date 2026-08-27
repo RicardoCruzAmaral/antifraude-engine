@@ -2,7 +2,10 @@
   "name": "antifraude-engine",
   "version": "1.0.0",
   "type": "commonjs",
-  "scripts": {},
+  "scripts": {
+    "test": "node --test tests/characterization/engine-rules.test.cjs tests/characterization/analyze-imei.test.cjs tests/golden-master/current-engine-v1.test.cjs",
+    "typecheck": "tsc --noEmit"
+  },
   "dependencies": {
     "@supabase/supabase-js": "^2.90.1",
     "@vercel/node": "^5.5.17",
