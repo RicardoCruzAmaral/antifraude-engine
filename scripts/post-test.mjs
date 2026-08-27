@@ -4,49 +4,48 @@ import "dotenv/config";
 const analyzeUrl = process.env.ANALYZE_URL || "http://localhost:3000/api/analyze";
 
 const payload = {
-  cpf: "17034130752",
-  nome: "Ricardo da Cruz Amaral",
-  email: "ricardoamaral704@gmail.com",
-  telefone_contato: "21959021655",
-  cep: "22713169",
+  cpf: "00000000000",
+  nome: "PESSOA SINTETICA DE TESTE",
+  email: "manual-test@example.invalid",
+  telefone_contato: "00000000000",
+  cep: "00000000",
   valor_celular: 3500,
 
-  partnerCode: "Simple2u",
-  salesChannel: "FingerPrint Front",
-  proposalId: "PCELL000123456789",
-  sessionId: "1010101010",
+  partnerCode: "synthetic-test-partner",
+  salesChannel: "synthetic-test-channel",
+  proposalId: "synthetic-test-proposal-0001",
+  sessionId: "synthetic-test-session-0001",
 
-  modelo_declarado: "Apple iPhone 15 Pro",
+  modelo_declarado: "SYNTHETIC TEST DEVICE",
 
-  // IMEI (já preparado para o motor)
-  imei: "356938035643809",
+  // IMEI sintético reservado exclusivamente para teste manual
+  imeiCode: "000000000000000",
 
-  // Fingerprint (POC)
+  // Fingerprint integralmente sintético
   device: {
-    fingerprintProvider: "fingerprintjs_pro",
-    visitorId: "ln6fFSG0DTHDsis1Z5KU",
-    requestId: "1770238629167.Kz4cVC",
+    fingerprintProvider: "synthetic-test-provider",
+    visitorId: "synthetic-test-visitor-0001",
+    requestId: "synthetic-test-request-0001",
     confidenceScore: 1,
-    confidenceRevision: "v1.1",
-    os: "Android",
-    osVersion: "10",
-    browserName: "Chrome Mobile",
-    browserVersion: "144.0.0",
+    confidenceRevision: "synthetic-test-v1",
+    os: "SyntheticOS",
+    osVersion: "1.0",
+    browserName: "SyntheticBrowser",
+    browserVersion: "1.0",
     isMobile: true,
     screenWidth: 360,
     screenHeight: 800,
     screenDPR: 3,
     screenWidthPhysical: 1080,
     screenHeightPhysical: 2400,
-    gpu: "Adreno (TM) 650",
+    gpu: "Synthetic Test GPU",
     cores: 8,
-    timezone: "America/Sao_Paulo",
-    languages: ["pt-BR", "pt", "en-US", "en"],
-    connectionType: "4g",
+    timezone: "Etc/UTC",
+    languages: ["en"],
+    connectionType: "synthetic-test-network",
     incognito: false,
-    ip: "179.218.35.235",
-    rawUserAgent:
-      "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Mobile Safari/537.36",
+    ip: "192.0.2.10",
+    rawUserAgent: "synthetic-test-user-agent/1.0",
     collectedAt: new Date().toISOString(),
   },
 };
