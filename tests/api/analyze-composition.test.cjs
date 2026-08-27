@@ -1,0 +1,92 @@
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const {
+  loadAnalyzeForCharacterization,
+  withIsolatedEnvironmentAsync,
+  withMutedConsoleAsync,
+} = require("../helpers/analyze-characterization-harness.cjs");
+
+function response() {
+  return {
+    statusCode: null,
+    body: null,
+    status(code) { this.statusCode = code; return this; },
+    json(body) { this.body = body; return body; },
+  };
+}
+
+test("composition root rejeita método diferente de POST com 405", async () => {
+  const loaded = loadAnalyzeForCharacterization({ mockUseCase: true });
+  const res = response();
+  await loaded.exports.default({ method: "GET" }, res);
+  assert.equal(res.statusCode, 405);
+  assert.equal(res.body.error, "Method not allowed");
+  assert.equal(loaded.calls.useCaseConstruct.length, 0);
+  assert.equal(loaded.calls.useCaseExecute.length, 0);
+});
+
+test("POST válido delega body e trace ao use case", async () => {
+  const body = { cpf: "123" };
+  const loaded = loadAnalyzeForCharacterization({
+    mockUseCase: true,
+    useCaseResult: { statusCode: 200, body: { ok: true } },
+  });
+  const res = response();
+  await loaded.exports.default({ method: "POST", body }, res);
+  assert.equal(loaded.calls.useCaseExecute.length, 1);
+  assert.equal(loaded.calls.useCaseExecute[0].body, body);
+  assert.equal(typeof loaded.calls.useCaseExecute[0].traceId, "string");
+  assert.equal(typeof loaded.calls.useCaseExecute[0].startedAtMs, "number");
+});
+
+test("status retornado pelo use case é respeitado", async () => {
+  const loaded = loadAnalyzeForCharacterization({
+    mockUseCase: true,
+    useCaseResult: { statusCode: 400, body: { ok: false, error: "Missing cpf" } },
+  });
+  const res = response();
+  await loaded.exports.default({ method: "POST", body: {} }, res);
+  assert.equal(res.statusCode, 400);
+  assert.deepEqual(res.body, { ok: false, error: "Missing cpf" });
+});
+
+test("exception fatal do use case preserva resposta HTTP 500", async () => {
+  const loaded = loadAnalyzeForCharacterization({
+    mockUseCase: true,
+    useCaseError: new Error("fatal-test"),
+  });
+  const res = response();
+  await withMutedConsoleAsync(() => loaded.exports.default({ method: "POST", body: {} }, res));
+  assert.equal(res.statusCode, 500);
+  assert.equal(res.body.error, "FUNCTION_INVOCATION_FAILED");
+  assert.equal(res.body.details, "fatal-test");
+});
+
+test("composition root injeta adapters concretos sem rede real", async () => {
+  await withIsolatedEnvironmentAsync({
+    SUPABASE_URL: "https://composition.invalid",
+    SUPABASE_SERVICE_ROLE_KEY: "synthetic-test-key",
+  }, async () => {
+    let networkCalls = 0;
+    const originalFetch = global.fetch;
+    global.fetch = async () => { networkCalls += 1; throw new Error("network"); };
+    try {
+      const loaded = loadAnalyzeForCharacterization({
+        mockUseCase: true,
+        useRealAdapters: true,
+        useCaseResult: { statusCode: 200, body: { ok: true } },
+      });
+      const res = response();
+      await loaded.exports.default({ method: "POST", body: { cpf: "123" } }, res);
+      const dependencies = loaded.calls.useCaseConstruct[0];
+      assert.equal(typeof dependencies.enrichmentProvider.enrich, "function");
+      assert.equal(typeof dependencies.imeiProvider.check, "function");
+      assert.equal(typeof dependencies.decisionCache.get, "function");
+      assert.equal(typeof dependencies.decisionAuditRepository.saveDecision, "function");
+      assert.equal(typeof dependencies.providerRawRepository.saveEnrichment, "function");
+      assert.equal(networkCalls, 0);
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+});

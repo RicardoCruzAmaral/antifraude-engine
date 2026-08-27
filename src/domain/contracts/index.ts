@@ -1,6 +1,5 @@
 export type {
   AnalysisSource,
-  InternalAnalysisResult,
 } from "./analysis";
 export type {
   Decision,

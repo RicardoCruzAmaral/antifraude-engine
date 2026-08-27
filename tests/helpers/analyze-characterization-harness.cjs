@@ -135,6 +135,9 @@ function loadAnalyzeForCharacterization(options = {}) {
     decisionLog: [],
     enrichmentRaw: [],
     imeiRaw: [],
+    persistenceFactory: [],
+    useCaseConstruct: [],
+    useCaseExecute: [],
   };
 
   const enrichmentAdapterModule = {
@@ -206,8 +209,26 @@ function loadAnalyzeForCharacterization(options = {}) {
       };
 
   const persistenceModule = {
-    createSupabasePersistenceOrNull: () => options.persistence === undefined ? null : persistence,
+    createSupabasePersistenceOrNull: () => {
+      calls.persistenceFactory.push(true);
+      return options.persistence === undefined ? null : persistence;
+    },
   };
+
+  const useCaseModule = options.mockUseCase
+    ? {
+        AnalyzeAntifraudUseCase: class {
+          constructor(dependencies) {
+            calls.useCaseConstruct.push(dependencies);
+          }
+          async execute(command) {
+            calls.useCaseExecute.push(command);
+            if (options.useCaseError) throw options.useCaseError;
+            return options.useCaseResult;
+          }
+        },
+      }
+    : null;
 
   const compiledModule = new Module(ANALYZE_PATH, module);
   compiledModule.filename = ANALYZE_PATH;
@@ -217,20 +238,29 @@ function loadAnalyzeForCharacterization(options = {}) {
   compiledModule.require = (request) => {
     if (request === "@supabase/supabase-js") return supabaseModule;
     if (
+      request === "../src/application/useCases/analyzeAntifraud" &&
+      useCaseModule
+    ) {
+      return useCaseModule;
+    }
+    if (
       request ===
-      "../src/infrastructure/persistence/supabase/supabasePersistence"
+      "../src/infrastructure/persistence/supabase/supabasePersistence" &&
+      !options.useRealAdapters
     ) {
       return persistenceModule;
     }
     if (
       request ===
-      "../src/infrastructure/providers/techtrail/techTrailEnrichmentProvider"
+      "../src/infrastructure/providers/techtrail/techTrailEnrichmentProvider" &&
+      !options.useRealAdapters
     ) {
       return enrichmentAdapterModule;
     }
     if (
       request ===
-      "../src/infrastructure/providers/imeiInfo/imeiInfoProvider"
+      "../src/infrastructure/providers/imeiInfo/imeiInfoProvider" &&
+      !options.useRealAdapters
     ) {
       return imeiAdapterModule;
     }
