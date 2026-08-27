@@ -20,6 +20,10 @@ const SUPABASE_PERSISTENCE_PATH = path.resolve(
   __dirname,
   "../../src/infrastructure/persistence/supabase/supabasePersistence.ts"
 );
+const ANALYZE_USE_CASE_PATH = path.resolve(
+  __dirname,
+  "../../src/application/useCases/analyzeAntifraud.ts"
+);
 
 const ISOLATED_ENV_NAMES = [
   "SUPABASE_URL",
@@ -107,6 +111,10 @@ function loadProviderAdaptersForCharacterization() {
 
 function loadSupabasePersistenceForCharacterization() {
   return withTypeScriptLoader(() => require(SUPABASE_PERSISTENCE_PATH));
+}
+
+function loadAnalyzeUseCaseForCharacterization() {
+  return withTypeScriptLoader(() => require(ANALYZE_USE_CASE_PATH));
 }
 
 function normalizeProviderInput(body) {
@@ -376,6 +384,7 @@ module.exports = {
   invokeAnalyze,
   loadActiveEngineForCharacterization,
   loadAnalyzeForCharacterization,
+  loadAnalyzeUseCaseForCharacterization,
   loadProviderAdaptersForCharacterization,
   loadSupabasePersistenceForCharacterization,
   projectDecision,
