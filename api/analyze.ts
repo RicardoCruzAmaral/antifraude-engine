@@ -13,11 +13,11 @@ import {
   finalizeEvaluation,
   preEvaluate,
 } from "../src/domain/engine";
-import { enrich, normalizeInput } from "../src/providers/enrichment";
-
-
-// (mantive os imports que você tinha; ainda não usamos o decision engine aqui)
-import { imeiCheckReal } from "../src/providers/imei";
+import {
+  normalizeEnrichmentInput,
+  techTrailEnrichmentProvider,
+} from "../src/infrastructure/providers/techtrail/techTrailEnrichmentProvider";
+import { imeiInfoProvider } from "../src/infrastructure/providers/imeiInfo/imeiInfoProvider";
 
 type CacheRow = {
   cpf: string;
@@ -422,7 +422,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const enrichTimeoutMs = envInt("ENRICHMENT_TIMEOUT_MS", 4000);
     const mode = envStr("ENRICHMENT_MODE", "mock");
 
-    const providerInput = normalizeInput({ ...req.body, traceId });
+    const providerInput = normalizeEnrichmentInput({ ...req.body, traceId });
 
     const enrichStarted = Date.now();
     let enrichResult: any = null;
@@ -432,7 +432,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     try {
       enrichResult = await Promise.race([
-        enrich(providerInput),
+        techTrailEnrichmentProvider.enrich(providerInput),
         new Promise((_, reject) =>
           setTimeout(() => {
             enrichTimedOut = true;
@@ -537,7 +537,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             modeloDeclarado: input_summary?.modelo_declarado ?? null,
           });
 
-          imeiResult = await imeiCheckReal({
+          imeiResult = await imeiInfoProvider.check({
             imeiCode: input_summary.imeiCode,
             modeloDeclarado: input_summary.modelo_declarado,
             timeoutMs: imeiTimeoutMs,

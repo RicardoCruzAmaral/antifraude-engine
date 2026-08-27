@@ -8,6 +8,14 @@ const ACTIVE_ENGINE_PATH = path.resolve(
   __dirname,
   "../../src/domain/engine/index.ts"
 );
+const TECHTRAIL_PROVIDER_PATH = path.resolve(
+  __dirname,
+  "../../src/infrastructure/providers/techtrail/techTrailEnrichmentProvider.ts"
+);
+const IMEI_INFO_PROVIDER_PATH = path.resolve(
+  __dirname,
+  "../../src/infrastructure/providers/imeiInfo/imeiInfoProvider.ts"
+);
 
 const ISOLATED_ENV_NAMES = [
   "SUPABASE_URL",
@@ -15,6 +23,9 @@ const ISOLATED_ENV_NAMES = [
   "SUPABASE_MISSING_POLICY",
   "ENRICHMENT_MODE",
   "ENRICHMENT_TIMEOUT_MS",
+  "ENRICHMENT_MOCK_MS",
+  "ENRICHMENT_URL_BASE",
+  "ENRICHMENT_AUTH",
   "ENRICHMENT_FAIL_DECISION",
   "SCORE_EMAIL_DIVERGENTE",
   "SCORE_TELEFONE_DIVERGENTE",
@@ -35,6 +46,10 @@ const ISOLATED_ENV_NAMES = [
   "SCORE_VALOR_CELULAR_HIGH_VALUE",
   "IMEI_TIMEOUT_MS",
   "SCORE_IMEI_PROBLEM",
+  "IMEI_INFO_API_KEY",
+  "IMEI_INFO_SERVICE_ID_SAMSUNG",
+  "IMEI_INFO_SERVICE_ID_APPLE",
+  "IMEI_INFO_SERVICE_ID_XIAOMI",
   "CACHE_TTL_DAYS_APPROVE",
   "CACHE_TTL_DAYS_APROVE",
   "CACHE_TTL_DAYS_DECLINE",
@@ -79,6 +94,13 @@ function loadActiveEngineForCharacterization() {
   return withTypeScriptLoader(() => require(ACTIVE_ENGINE_PATH));
 }
 
+function loadProviderAdaptersForCharacterization() {
+  return withTypeScriptLoader(() => ({
+    enrichment: require(TECHTRAIL_PROVIDER_PATH),
+    imei: require(IMEI_INFO_PROVIDER_PATH),
+  }));
+}
+
 function normalizeProviderInput(body) {
   return {
     ...body,
@@ -94,27 +116,31 @@ function loadAnalyzeForCharacterization(options = {}) {
     supabase: [],
   };
 
-  const enrichmentModule = {
-    normalizeInput: normalizeProviderInput,
-    enrich: async (input) => {
-      calls.enrichment.push(input);
-      if (typeof options.enrichmentResult === "function") {
-        return options.enrichmentResult(input);
-      }
-      return options.enrichmentResult;
+  const enrichmentAdapterModule = {
+    normalizeEnrichmentInput: normalizeProviderInput,
+    techTrailEnrichmentProvider: {
+      enrich: async (input) => {
+        calls.enrichment.push(input);
+        if (typeof options.enrichmentResult === "function") {
+          return options.enrichmentResult(input);
+        }
+        return options.enrichmentResult;
+      },
     },
   };
 
-  const imeiModule = {
-    imeiCheckReal: async (input) => {
-      calls.imei.push(input);
-      if (typeof options.imeiResult === "function") {
-        return options.imeiResult(input);
-      }
-      if (!options.imeiResult) {
-        throw new Error("UNEXPECTED_IMEI_CALL");
-      }
-      return options.imeiResult;
+  const imeiAdapterModule = {
+    imeiInfoProvider: {
+      check: async (input) => {
+        calls.imei.push(input);
+        if (typeof options.imeiResult === "function") {
+          return options.imeiResult(input);
+        }
+        if (!options.imeiResult) {
+          throw new Error("UNEXPECTED_IMEI_CALL");
+        }
+        return options.imeiResult;
+      },
     },
   };
 
@@ -132,8 +158,18 @@ function loadAnalyzeForCharacterization(options = {}) {
   const defaultRequire = compiledModule.require.bind(compiledModule);
   compiledModule.require = (request) => {
     if (request === "@supabase/supabase-js") return supabaseModule;
-    if (request === "../src/providers/enrichment") return enrichmentModule;
-    if (request === "../src/providers/imei") return imeiModule;
+    if (
+      request ===
+      "../src/infrastructure/providers/techtrail/techTrailEnrichmentProvider"
+    ) {
+      return enrichmentAdapterModule;
+    }
+    if (
+      request ===
+      "../src/infrastructure/providers/imeiInfo/imeiInfoProvider"
+    ) {
+      return imeiAdapterModule;
+    }
     return defaultRequire(request);
   };
 
@@ -170,6 +206,15 @@ function withIsolatedEnvironment(overrides, callback) {
   const restore = isolateEnvironment(overrides);
   try {
     return callback();
+  } finally {
+    restore();
+  }
+}
+
+async function withIsolatedEnvironmentAsync(overrides, callback) {
+  const restore = isolateEnvironment(overrides);
+  try {
+    return await callback();
   } finally {
     restore();
   }
@@ -262,7 +307,9 @@ module.exports = {
   invokeAnalyze,
   loadActiveEngineForCharacterization,
   loadAnalyzeForCharacterization,
+  loadProviderAdaptersForCharacterization,
   projectDecision,
   withIsolatedEnvironment,
+  withIsolatedEnvironmentAsync,
   withMutedConsole,
 };

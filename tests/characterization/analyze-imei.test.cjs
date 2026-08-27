@@ -203,3 +203,5 @@ test("decisão DECLINADO do enrichment não é usada pela decisão final", async
   assert.equal(result.body.score, 0);
   assert.equal(result.body.decision, "APPROVE");
 });
+
+require("./provider-adapters.cases.cjs");
