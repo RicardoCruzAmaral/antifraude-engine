@@ -12,6 +12,8 @@ import {
   shadowWriteReplay,
   shadowWriteTechTrail,
 } from "../cacheV2/shadowWriter";
+import type { TechTrailReadDependencies } from "../cacheV2/techTrailReader";
+import { readTechTrailEvidence } from "../cacheV2/techTrailReader";
 export { buildReplayInput } from "../cacheV2/replayInput";
 import type {
   Decision,
@@ -28,6 +30,7 @@ export type AnalyzeAntifraudDependencies = {
   decisionAuditRepository: DecisionAuditRepository | null;
   providerRawRepository: ProviderRawRepository | null;
   cacheV2Shadow?: CacheV2ShadowDependencies;
+  cacheV2TechTrailRead?: TechTrailReadDependencies;
 };
 
 export type AnalyzeAntifraudConfig = {
@@ -40,6 +43,7 @@ export type AnalyzeAntifraudConfig = {
   cacheTtlDaysApprove: number;
   cacheTtlDaysDecline: number;
   cacheTtlSecondsTechFail: number;
+  decisionCacheV1ReadEnabled?: boolean;
 };
 
 export type AnalyzeAntifraudCommand = {
@@ -132,9 +136,12 @@ export class AnalyzeAntifraudUseCase {
       decisionAuditRepository,
       providerRawRepository,
       cacheV2Shadow,
+      cacheV2TechTrailRead,
     } = this.dependencies;
     const hasPersistence = !!decisionCache && !!decisionAuditRepository && !!providerRawRepository;
     const events: any[] = [];
+    const auditOnlyEvents: any[] = [];
+    const eventsForAudit = () => auditOnlyEvents.length ? [...events, ...auditOnlyEvents] : events;
     let techTrailShadowCandidate: { cpf: string; result: any; fetchedAt: string } | null = null;
     let imeiShadowCandidate: {
       imeiCode: string;
@@ -192,7 +199,7 @@ export class AnalyzeAntifraudUseCase {
 
     let hit = null;
     let cacheGetMs = 0;
-    if (hasPersistence) {
+    if (hasPersistence && config.decisionCacheV1ReadEnabled !== false) {
       const cacheGetStarted = Date.now();
       try {
         hit = await decisionCache.get(cpf);
@@ -226,7 +233,7 @@ export class AnalyzeAntifraudUseCase {
           await decisionAuditRepository.saveDecision({
             traceId, cpf, source: "cache", cacheHit: true, decision: hit.decision,
             score: hit.score, reasons: hit.reasons, ruleVersion: hit.ruleVersion,
-            inputSummary, events, latencyMs: totalMs,
+            inputSummary, events: eventsForAudit(), latencyMs: totalMs,
           });
         } catch (err) {
           console.error("[decision_log] insert failed", { trace_id: traceId, err });
@@ -249,30 +256,70 @@ export class AnalyzeAntifraudUseCase {
     const enrichStarted = Date.now();
     let enrichResult: any = null;
     let enrichTimedOut = false;
+    let enrichmentFromV2 = false;
     mark("enrichment_start", true, {
       mode: config.enrichmentMode,
       timeoutMs: config.enrichmentTimeoutMs,
     });
-    try {
-      enrichResult = await Promise.race([
-        enrichmentProvider.enrich(providerInput),
-        new Promise((_, reject) => setTimeout(() => {
-          enrichTimedOut = true;
-          reject(new Error("ENRICHMENT_TIMEOUT"));
-        }, config.enrichmentTimeoutMs)),
-      ]);
-    } catch (err: any) {
-      enrichResult = {
-        ok: false,
-        mode: config.enrichmentMode,
-        provider: config.enrichmentMode === "real" ? "techtrail" : "mock",
-        ms: Date.now() - enrichStarted,
-        httpStatus: null,
-        requestParams: providerInput ? { cpf: providerInput.cpf } : { cpf },
-        raw: null,
-        summary: null,
-        error: { msg: err?.message ?? "ENRICHMENT_ERROR" },
-      };
+    if (cacheV2TechTrailRead) {
+      const cached = await readTechTrailEvidence(cacheV2TechTrailRead, { traceId, cpf });
+      if (cached.state === "HIT") {
+        enrichmentFromV2 = true;
+        enrichResult = {
+          ok: true,
+          mode: config.enrichmentMode,
+          provider: cached.evidence.provider,
+          ms: 0,
+          httpStatus: null,
+          requestParams: null,
+          raw: null,
+          summary: cached.evidence.normalizedEvidence,
+        };
+        auditOnlyEvents.push({
+          ts: nowIso(),
+          ms: Date.now() - started,
+          step: "cache_v2_techtrail_read",
+          ok: true,
+          meta: {
+            state: "HIT",
+            source: "techtrail_evidence_cache",
+            fetchedAt: cached.evidence.fetchedAt,
+            expiresAt: cached.evidence.expiresAt,
+            rawReference: cached.evidence.rawReference ?? null,
+          },
+        });
+      } else {
+        auditOnlyEvents.push({
+          ts: nowIso(),
+          ms: Date.now() - started,
+          step: "cache_v2_techtrail_read",
+          ok: cached.cacheState !== "BACKEND_ERROR",
+          meta: { state: cached.cacheState, source: "techtrail_evidence_cache" },
+        });
+      }
+    }
+    if (!enrichmentFromV2) {
+      try {
+        enrichResult = await Promise.race([
+          enrichmentProvider.enrich(providerInput),
+          new Promise((_, reject) => setTimeout(() => {
+            enrichTimedOut = true;
+            reject(new Error("ENRICHMENT_TIMEOUT"));
+          }, config.enrichmentTimeoutMs)),
+        ]);
+      } catch (err: any) {
+        enrichResult = {
+          ok: false,
+          mode: config.enrichmentMode,
+          provider: config.enrichmentMode === "real" ? "techtrail" : "mock",
+          ms: Date.now() - enrichStarted,
+          httpStatus: null,
+          requestParams: providerInput ? { cpf: providerInput.cpf } : { cpf },
+          raw: null,
+          summary: null,
+          error: { msg: err?.message ?? "ENRICHMENT_ERROR" },
+        };
+      }
     }
     const enrichMs = Date.now() - enrichStarted;
     mark("enrichment_done", !!enrichResult?.ok, {
@@ -283,7 +330,7 @@ export class AnalyzeAntifraudUseCase {
       httpStatus: enrichResult?.httpStatus ?? null,
     });
 
-    if (hasPersistence) {
+    if (hasPersistence && !enrichmentFromV2) {
       try {
         await providerRawRepository.saveEnrichment({
           traceId, cpf,
@@ -300,14 +347,20 @@ export class AnalyzeAntifraudUseCase {
         console.error("[enrichment_raw] insert failed", { trace_id: traceId, err });
       }
       mark("enrichment_raw_saved", true);
-    } else {
+    } else if (!enrichmentFromV2) {
       mark("enrichment_raw_skipped_no_supabase", true);
+    } else {
+      // Preserva a sequência pública legada; a auditoria interna identifica
+      // que nenhum enrichment_raw novo foi criado para o HIT V2.
+      mark("enrichment_raw_saved", true);
     }
-    techTrailShadowCandidate = {
-      cpf,
-      result: enrichResult,
-      fetchedAt: new Date(enrichStarted).toISOString(),
-    };
+    if (!enrichmentFromV2) {
+      techTrailShadowCandidate = {
+        cpf,
+        result: enrichResult,
+        fetchedAt: new Date(enrichStarted).toISOString(),
+      };
+    }
 
     let decision: Decision;
     let reasons: string[] = [];
@@ -458,7 +511,7 @@ export class AnalyzeAntifraudUseCase {
       try {
         await decisionAuditRepository.saveDecision({
           traceId, cpf, source: "engine", cacheHit: false, decision, score, reasons,
-          ruleVersion, inputSummary, events, latencyMs: totalMs,
+          ruleVersion, inputSummary, events: eventsForAudit(), latencyMs: totalMs,
         });
       } catch (err) {
         console.error("[decision_log] insert failed", { trace_id: traceId, err });

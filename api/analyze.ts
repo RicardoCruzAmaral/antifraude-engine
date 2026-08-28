@@ -12,6 +12,7 @@ import { resolveCacheV2Config } from "../src/infrastructure/config/cacheV2Config
 import { createHmacLookupTokenServiceFromEnv } from "../src/infrastructure/security/hmacLookupTokenService";
 import { consoleCacheV2ShadowTelemetry } from "../src/infrastructure/telemetry/consoleCacheV2ShadowTelemetry";
 import type { CacheV2ShadowDependencies } from "../src/application/cacheV2/shadowWriter";
+import type { TechTrailReadDependencies } from "../src/application/cacheV2/techTrailReader";
 
 function envInt(name: string, fallback: number) {
   const value = Number(process.env[name]);
@@ -38,7 +39,13 @@ function resolveConfig(): AnalyzeAntifraudConfig {
   };
 }
 
-function composeCacheV2Shadow(traceId: string): CacheV2ShadowDependencies | undefined {
+type CacheV2Composition = {
+  shadow?: CacheV2ShadowDependencies;
+  techTrailRead?: TechTrailReadDependencies;
+  decisionCacheV1ReadEnabled: boolean;
+};
+
+function composeCacheV2(traceId: string): CacheV2Composition {
   let config;
   try {
     config = resolveCacheV2Config();
@@ -49,9 +56,11 @@ function composeCacheV2Shadow(traceId: string): CacheV2ShadowDependencies | unde
       traceId,
       reason: "INVALID_CONFIGURATION",
     });
-    return undefined;
+    return { decisionCacheV1ReadEnabled: true };
   }
-  if (!config.writeEnabled) return undefined;
+  if (!config.writeEnabled && !config.readTechTrailEnabled) {
+    return { decisionCacheV1ReadEnabled: config.decisionCacheV1ReadEnabled };
+  }
 
   let lookupTokenService = null;
   try {
@@ -77,7 +86,14 @@ function composeCacheV2Shadow(traceId: string): CacheV2ShadowDependencies | unde
     });
   }
 
-  return {
+  const versions = {
+    cacheSchemaVersion: "cache-v2-schema-v1",
+    techTrailProviderContractVersion: "techtrail-person-v1",
+    techTrailNormalizerVersion: "techtrail-normalizer-v1",
+    imeiProviderContractVersion: "imei-info-v1",
+    imeiNormalizerVersion: "imei-normalizer-v1",
+  };
+  const shadow: CacheV2ShadowDependencies | undefined = config.writeEnabled ? {
     analysisReplayRepository: adapters?.analysisReplayRepository ?? null,
     enrichmentEvidenceCache: adapters?.enrichmentEvidenceCache ?? null,
     imeiEvidenceCache: adapters?.imeiEvidenceCache ?? null,
@@ -86,13 +102,21 @@ function composeCacheV2Shadow(traceId: string): CacheV2ShadowDependencies | unde
     techTrailTtlDays: config.techTrailTtlDays,
     imeiTtlDays: config.imeiTtlDays,
     replayTtlDays: config.replayTtlDays,
-    versions: {
-      cacheSchemaVersion: "cache-v2-schema-v1",
-      techTrailProviderContractVersion: "techtrail-person-v1",
-      techTrailNormalizerVersion: "techtrail-normalizer-v1",
-      imeiProviderContractVersion: "imei-info-v1",
-      imeiNormalizerVersion: "imei-normalizer-v1",
-    },
+    versions,
+  } : undefined;
+  const techTrailRead: TechTrailReadDependencies | undefined = config.readTechTrailEnabled ? {
+    enrichmentEvidenceCache: adapters?.enrichmentEvidenceCache ?? null,
+    lookupTokenService,
+    telemetry: consoleCacheV2ShadowTelemetry,
+    provider: envStr("ENRICHMENT_MODE", "mock") === "real" ? "techtrail" : "mock",
+    providerContractVersion: versions.techTrailProviderContractVersion,
+    normalizerVersion: versions.techTrailNormalizerVersion,
+    cacheSchemaVersion: versions.cacheSchemaVersion,
+  } : undefined;
+  return {
+    shadow,
+    techTrailRead,
+    decisionCacheV1ReadEnabled: config.decisionCacheV1ReadEnabled,
   };
 }
 
@@ -106,19 +130,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(405).json({ ok: false, traceId, error: "Method not allowed" });
     }
 
+    const cacheV2 = composeCacheV2(traceId);
     const useCase = new AnalyzeAntifraudUseCase({
       enrichmentProvider: techTrailEnrichmentProvider,
       imeiProvider: imeiInfoProvider,
       decisionCache: persistence?.decisionCache ?? null,
       decisionAuditRepository: persistence?.decisionAuditRepository ?? null,
       providerRawRepository: persistence?.providerRawRepository ?? null,
-      cacheV2Shadow: composeCacheV2Shadow(traceId),
+      cacheV2Shadow: cacheV2.shadow,
+      cacheV2TechTrailRead: cacheV2.techTrailRead,
     });
     const result = await useCase.execute({
       body: req.body,
       traceId,
       startedAtMs,
-      config: resolveConfig(),
+      config: {
+        ...resolveConfig(),
+        decisionCacheV1ReadEnabled: cacheV2.decisionCacheV1ReadEnabled,
+      },
     });
     return res.status(result.statusCode).json(result.body);
   } catch (err: any) {

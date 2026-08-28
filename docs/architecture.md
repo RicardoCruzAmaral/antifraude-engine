@@ -35,9 +35,9 @@ Os adapters TechTrail e IMEI.info ficam em `src/infrastructure/providers`. Cache
 - Estratégia explícita para indisponibilidade de providers e persistência.
 - Segurança, privacidade, retenção e mascaramento de dados sensíveis.
 
-## Cache V2 — SHADOW WRITE AVAILABLE / READ NOT ACTIVE
+## Cache V2 — SHADOW WRITE AVAILABLE / TECHTRAIL READ BEHIND FLAG
 
-A fundação do Cache V2 existe em paralelo ao `decision_cache` V1. Quando `CACHE_V2_WRITE_ENABLED=true`, o composition root injeta somente writers shadow best-effort. Nenhum cache V2 é lido, nenhum provider é pulado e nenhuma evidência V2 influencia score, reasons, profile ou decisão. Com a flag desligada, nenhuma dependência V2 é necessária e nenhuma escrita é tentada. O `decision_cache` V1 continua sendo consultado e gravado normalmente.
+A fundação do Cache V2 existe em paralelo ao `decision_cache` V1. Quando `CACHE_V2_WRITE_ENABLED=true`, o composition root injeta writers shadow best-effort. A única leitura V2 disponível é TechTrail, separadamente controlada por `CACHE_V2_READ_TECHTRAIL_ENABLED`; ela evita o provider em HIT, mas nunca reutiliza uma decisão. IMEI e Replay reads permanecem inativos. Com as flags desligadas, nenhuma dependência V2 é necessária. O `decision_cache` V1 continua ativo por default.
 
 Os mecanismos planejados são independentes:
 
@@ -81,4 +81,18 @@ Os defaults preservam integralmente o V1:
 - `CACHE_V2_READ_IMEI_ENABLED=false`;
 - `DECISION_CACHE_V1_READ_ENABLED=true`.
 
-As flags de read continuam não consumidas pelo fluxo. `ANALYSIS_REPLAY_ENABLED` permanece reservado para a futura leitura/replay; shadow write é controlado exclusivamente por `CACHE_V2_WRITE_ENABLED`.
+`CACHE_V2_READ_IMEI_ENABLED` e `ANALYSIS_REPLAY_ENABLED` continuam não consumidas pelo fluxo. Shadow write é controlado exclusivamente por `CACHE_V2_WRITE_ENABLED`.
+
+## TechTrail Cache V2 READ — AVAILABLE BEHIND FLAG
+
+`CACHE_V2_READ_TECHTRAIL_ENABLED=false` continua sendo o default. Quando habilitada, a leitura ocorre depois do cache de decisão V1 e antes da chamada TechTrail. `DECISION_CACHE_V1_READ_ENABLED` agora governa explicitamente apenas a leitura antecipada V1; seu default permanece `true` e as escritas V1 continuam ativas.
+
+A identidade consultada é o token HMAC do CPF, provider e versões de contrato, normalizer e schema. Email, telefone, CEP, valor, proposta, aparelho, IMEI, fingerprint e canal não participam dessa identidade.
+
+- `HIT` fresh, `COMPLETE` e compatível: evita a chamada paga TechTrail e usa `normalizedEvidence`; hard blocks, score, IMEI e decisão são recalculados.
+- `MISS`, `EXPIRED`, `INCOMPATIBLE` ou `BACKEND_ERROR`: chama TechTrail exatamente uma vez, sem stale-while-revalidate.
+- HMAC/config/adapter indisponível: bypass best-effort e chamada normal ao provider.
+
+Um HIT não cria `enrichment_raw`, não renova `fetchedAt`/`expiresAt` e não dispara shadow write da mesma evidência. Provenance (`state`, source, fetched/expiry e `rawReference`) é acrescentada somente à cópia dos events persistida em `decision_log`; não aparece nos events do response. Para preservar a sequência pública histórica, o step legado `enrichment_raw_saved` continua presente no response mesmo no HIT, embora nenhuma inserção raw seja executada — débito semântico de observabilidade já conhecido.
+
+IMEI Evidence Cache e Analysis Replay continuam sem qualquer leitura ativa.
