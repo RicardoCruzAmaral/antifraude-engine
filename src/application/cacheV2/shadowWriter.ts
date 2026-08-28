@@ -27,7 +27,7 @@ export type CacheV2ShadowDependencies = {
   lookupTokenService: LookupTokenService | null;
   telemetry: CacheV2ShadowTelemetry;
   techTrailTtlDays: number;
-  imeiTtlDays: number | null;
+  imeiTtlDays: number;
   replayTtlDays: number | null;
   versions: CacheV2ShadowVersions;
 };
@@ -82,10 +82,6 @@ export async function shadowWriteImei(
   dependencies: CacheV2ShadowDependencies,
   input: { traceId: string; imeiCode: string; result: NormalizedImeiResult; fetchedAt: string }
 ) {
-  if (dependencies.imeiTtlDays === null) {
-    emit(dependencies, { name: "cache_v2_imei_write_skipped", traceId: input.traceId, reason: "TTL_NOT_CONFIGURED" });
-    return;
-  }
   if (input.result.reason === "IMEI_FAIL" || input.result.timedOut) {
     emit(dependencies, { name: "cache_v2_imei_write_skipped", traceId: input.traceId, reason: "TECHNICAL_FAILURE" });
     return;
@@ -102,9 +98,10 @@ export async function shadowWriteImei(
         ? "local-validation"
         : String(input.result.serviceId),
       normalizedEvidence: {
-        reason: input.result.reason,
+        // Mismatch e brandExpected pertencem ao contexto da proposta. A evidência
+        // factual guarda o resultado do aparelho e a leitura reaplica esse contexto.
+        reason: input.result.reason === "IMEI_BRAND_MISMATCH" ? "IMEI_OK" : input.result.reason,
         httpStatus: input.result.httpStatus ?? null,
-        brandExpected: input.result.brandExpected ?? null,
         brandReturned: input.result.brandReturned ?? null,
         serviceId: input.result.serviceId ?? null,
         summary: input.result.summary ?? null,

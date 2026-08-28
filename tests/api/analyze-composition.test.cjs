@@ -101,6 +101,30 @@ test("CACHE_V2_WRITE_ENABLED=false não injeta shadow", async () => {
     await loaded.exports.default({ method: "POST", body: { cpf: "123" } }, res);
     assert.equal(loaded.calls.useCaseConstruct[0].cacheV2Shadow, undefined);
     assert.equal(loaded.calls.useCaseConstruct[0].cacheV2TechTrailRead, undefined);
+    assert.equal(loaded.calls.useCaseConstruct[0].cacheV2ImeiRead, undefined);
+  });
+});
+
+test("CACHE_V2_READ_IMEI_ENABLED compõe somente leitura IMEI", async () => {
+  await withIsolatedEnvironmentAsync({
+    CACHE_V2_READ_IMEI_ENABLED: "true",
+    CACHE_V2_WRITE_ENABLED: "false",
+    EVIDENCE_LOOKUP_HMAC_KEY: "synthetic-composition-key",
+    SUPABASE_URL: "https://composition.invalid",
+    SUPABASE_SERVICE_ROLE_KEY: "synthetic-test-key",
+  }, async () => {
+    const loaded = loadAnalyzeForCharacterization({
+      mockUseCase: true,
+      useCaseResult: { statusCode: 200, body: { ok: true } },
+    });
+    const res = response();
+    await loaded.exports.default({ method: "POST", body: { cpf: "123" } }, res);
+    const dependencies = loaded.calls.useCaseConstruct[0];
+    assert.equal(dependencies.cacheV2Shadow, undefined);
+    assert.equal(dependencies.cacheV2TechTrailRead, undefined);
+    assert.equal(typeof dependencies.cacheV2ImeiRead.imeiEvidenceCache.get, "function");
+    assert.equal(typeof dependencies.cacheV2ImeiRead.lookupTokenService.tokenizeImei, "function");
+    assert.equal(typeof dependencies.cacheV2ImeiRead.resolveContext, "function");
   });
 });
 

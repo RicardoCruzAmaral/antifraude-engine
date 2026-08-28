@@ -41,7 +41,7 @@ function onlyDigits(s: any): string {
   return String(s || "").replace(/\D/g, "");
 }
 
-function inferBrand(modeloDeclarado: string | null | undefined): SupportedBrand {
+export function inferBrand(modeloDeclarado: string | null | undefined): SupportedBrand {
   const m = normalizeText(modeloDeclarado);
 
   if (!m) return "UNKNOWN";
@@ -100,7 +100,7 @@ function normalizeReturnedBrand(rawResult: any): string | null {
   return null;
 }
 
-function isValidImei(imei: string): boolean {
+export function isValidImei(imei: string): boolean {
   const clean = onlyDigits(imei);
   if (clean.length !== 15) return false;
 
@@ -121,7 +121,7 @@ function isValidImei(imei: string): boolean {
   return checkDigit === Number(clean[14]);
 }
 
-function getServiceIdByBrand(brand: SupportedBrand): number | null {
+export function getServiceIdByBrand(brand: SupportedBrand): number | null {
   const samsung = Number(process.env.IMEI_INFO_SERVICE_ID_SAMSUNG || 76);
   const apple = Number(process.env.IMEI_INFO_SERVICE_ID_APPLE || 19);
   const xiaomi = Number(process.env.IMEI_INFO_SERVICE_ID_XIAOMI || 84);
@@ -393,4 +393,21 @@ export async function imeiCheckReal(input: {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+export function resolveImeiLookupContext(input: {
+  imeiCode: string;
+  modeloDeclarado?: string | null;
+}) {
+  const normalizedImei = onlyDigits(input.imeiCode);
+  const brandExpected = inferBrand(input.modeloDeclarado);
+  const serviceId = normalizedImei && isValidImei(normalizedImei)
+    ? getServiceIdByBrand(brandExpected)
+    : null;
+  return {
+    normalizedImei,
+    brandExpected,
+    serviceId,
+    service: serviceId === null ? "local-validation" : String(serviceId),
+  };
 }

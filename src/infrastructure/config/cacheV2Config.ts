@@ -5,7 +5,7 @@ export type CacheV2Config = {
   readImeiEnabled: boolean;
   decisionCacheV1ReadEnabled: boolean;
   techTrailTtlDays: number;
-  imeiTtlDays: number | null;
+  imeiTtlDays: number;
   replayTtlDays: number | null;
 };
 
@@ -31,7 +31,7 @@ export function resolveCacheV2Config(): CacheV2Config {
     readImeiEnabled: envBool("CACHE_V2_READ_IMEI_ENABLED", false),
     decisionCacheV1ReadEnabled: envBool("DECISION_CACHE_V1_READ_ENABLED", true),
     techTrailTtlDays: optionalPositiveInt("TECHTRAIL_CACHE_TTL_DAYS") ?? 30,
-    imeiTtlDays: optionalPositiveInt("IMEI_CACHE_TTL_DAYS"),
+    imeiTtlDays: optionalPositiveInt("IMEI_CACHE_TTL_DAYS") ?? 30,
     replayTtlDays: optionalPositiveInt("ANALYSIS_REPLAY_TTL_DAYS"),
   };
 }

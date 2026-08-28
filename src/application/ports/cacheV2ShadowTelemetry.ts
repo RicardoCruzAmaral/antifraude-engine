@@ -15,6 +15,12 @@ export type CacheV2ShadowEvent = {
     | "cache_v2_techtrail_read_incompatible"
     | "cache_v2_techtrail_read_backend_error"
     | "cache_v2_techtrail_read_bypass"
+    | "cache_v2_imei_read_hit"
+    | "cache_v2_imei_read_miss"
+    | "cache_v2_imei_read_expired"
+    | "cache_v2_imei_read_incompatible"
+    | "cache_v2_imei_read_backend_error"
+    | "cache_v2_imei_read_bypass"
     | "cache_v2_configuration_error";
   traceId: string;
   reason?: string;

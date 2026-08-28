@@ -14,6 +14,8 @@ import {
 } from "../cacheV2/shadowWriter";
 import type { TechTrailReadDependencies } from "../cacheV2/techTrailReader";
 import { readTechTrailEvidence } from "../cacheV2/techTrailReader";
+import type { ImeiReadDependencies } from "../cacheV2/imeiReader";
+import { readImeiEvidence } from "../cacheV2/imeiReader";
 export { buildReplayInput } from "../cacheV2/replayInput";
 import type {
   Decision,
@@ -31,6 +33,7 @@ export type AnalyzeAntifraudDependencies = {
   providerRawRepository: ProviderRawRepository | null;
   cacheV2Shadow?: CacheV2ShadowDependencies;
   cacheV2TechTrailRead?: TechTrailReadDependencies;
+  cacheV2ImeiRead?: ImeiReadDependencies;
 };
 
 export type AnalyzeAntifraudConfig = {
@@ -137,6 +140,7 @@ export class AnalyzeAntifraudUseCase {
       providerRawRepository,
       cacheV2Shadow,
       cacheV2TechTrailRead,
+      cacheV2ImeiRead,
     } = this.dependencies;
     const hasPersistence = !!decisionCache && !!decisionAuditRepository && !!providerRawRepository;
     const events: any[] = [];
@@ -397,37 +401,70 @@ export class AnalyzeAntifraudUseCase {
             modeloDeclarado: inputSummary.modelo_declarado ?? null,
           });
           const imeiStartedAt = nowIso();
-          imeiResult = await imeiProvider.check({
-            imeiCode: inputSummary.imeiCode,
-            modeloDeclarado: inputSummary.modelo_declarado,
-            timeoutMs: config.imeiTimeoutMs,
-          });
-          imeiResultGlobal = imeiResult;
-          if (hasPersistence) {
+          let imeiFromV2 = false;
+          if (cacheV2ImeiRead) {
+            const cached = await readImeiEvidence(cacheV2ImeiRead, {
+              traceId,
+              imeiCode: inputSummary.imeiCode,
+              modeloDeclarado: inputSummary.modelo_declarado,
+            });
+            if (cached.state === "HIT") {
+              imeiFromV2 = true;
+              imeiResult = cached.result;
+              auditOnlyEvents.push({
+                ts: nowIso(), ms: Date.now() - started, step: "cache_v2_imei_read", ok: true,
+                meta: {
+                  state: "HIT", source: "imei_evidence_cache",
+                  fetchedAt: cached.evidence.fetchedAt, expiresAt: cached.evidence.expiresAt,
+                  rawReference: cached.evidence.rawReference ?? null,
+                  provider: cached.evidence.provider, service: cached.evidence.service,
+                  ageMs: Math.max(0, Date.now() - Date.parse(cached.evidence.fetchedAt)),
+                },
+              });
+            } else {
+              auditOnlyEvents.push({
+                ts: nowIso(), ms: Date.now() - started, step: "cache_v2_imei_read",
+                ok: cached.cacheState !== "BACKEND_ERROR",
+                meta: { state: cached.cacheState, source: "imei_evidence_cache" },
+              });
+            }
+          }
+          if (!imeiFromV2) {
+            imeiResult = await imeiProvider.check({
+              imeiCode: inputSummary.imeiCode,
+              modeloDeclarado: inputSummary.modelo_declarado,
+              timeoutMs: config.imeiTimeoutMs,
+            });
+          }
+          const currentImeiResult = imeiResult as NormalizedImeiResult;
+          imeiResultGlobal = currentImeiResult;
+          if (hasPersistence && !imeiFromV2) {
             try {
               await providerRawRepository.saveImei({
                 traceId, cpf,
                 imeiCode: inputSummary.imeiCode ?? null,
                 modeloDeclarado: inputSummary.modelo_declarado ?? null,
-                result: imeiResult,
+                result: currentImeiResult,
               });
             } catch (err) {
               console.error("[imei_raw] insert failed", err);
             }
           }
-          imeiShadowCandidate = {
-            imeiCode: inputSummary.imeiCode,
-            result: imeiResult,
-            fetchedAt: imeiStartedAt,
-          };
-          mark("imei_check_done", imeiResult.ok, {
-            reason: imeiResult.reason,
-            provider: imeiResult.provider,
-            ms: imeiResult.ms,
-            brandExpected: imeiResult.brandExpected ?? null,
-            brandReturned: imeiResult.brandReturned ?? null,
-            serviceId: imeiResult.serviceId ?? null,
-            imeiSummary: imeiResult.summary ?? null,
+          if (!imeiFromV2) {
+            imeiShadowCandidate = {
+              imeiCode: inputSummary.imeiCode,
+              result: currentImeiResult,
+              fetchedAt: imeiStartedAt,
+            };
+          }
+          mark("imei_check_done", currentImeiResult.ok, {
+            reason: currentImeiResult.reason,
+            provider: currentImeiResult.provider,
+            ms: currentImeiResult.ms,
+            brandExpected: currentImeiResult.brandExpected ?? null,
+            brandReturned: currentImeiResult.brandReturned ?? null,
+            serviceId: currentImeiResult.serviceId ?? null,
+            imeiSummary: currentImeiResult.summary ?? null,
           });
         } else {
           mark("imei_check_skipped", true, { reason: "missing_imei" });

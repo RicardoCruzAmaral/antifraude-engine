@@ -31,7 +31,7 @@ test("input hash é canônico e payload diferente muda o hash", () => {
   );
 });
 
-test("configuração V2 preserva defaults inativos e TTL TechTrail de 30 dias", () => {
+test("configuração V2 preserva flags inativas e TTLs independentes de 30 dias", () => {
   withIsolatedEnvironment({}, () => {
     assert.deepEqual(foundation.config.resolveCacheV2Config(), {
       analysisReplayEnabled: false,
@@ -40,17 +40,17 @@ test("configuração V2 preserva defaults inativos e TTL TechTrail de 30 dias", 
       readImeiEnabled: false,
       decisionCacheV1ReadEnabled: true,
       techTrailTtlDays: 30,
-      imeiTtlDays: null,
+      imeiTtlDays: 30,
       replayTtlDays: null,
     });
   });
 });
 
-test("TTLs configuráveis preservam ausência de defaults IMEI/replay", () => {
+test("TTLs configuráveis preservam default IMEI independente e replay ausente", () => {
   withIsolatedEnvironment({ TECHTRAIL_CACHE_TTL_DAYS: "12" }, () => {
     const config = foundation.config.resolveCacheV2Config();
     assert.equal(config.techTrailTtlDays, 12);
-    assert.equal(config.imeiTtlDays, null);
+    assert.equal(config.imeiTtlDays, 30);
     assert.equal(config.replayTtlDays, null);
     assert.equal(
       foundation.config.evidenceExpiresAt("2026-08-01T00:00:00.000Z", config.techTrailTtlDays),

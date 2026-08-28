@@ -62,7 +62,7 @@ function scenario(options = {}) {
       foundation.hmac.createHmacLookupTokenService("synthetic-shadow-secret"),
     telemetry: { record(event) { calls.telemetry.push(event); } },
     techTrailTtlDays: 30,
-    imeiTtlDays: options.imeiTtlDays ?? null,
+    imeiTtlDays: options.imeiTtlDays ?? 30,
     replayTtlDays: options.replayTtlDays ?? null,
     versions: {
       cacheSchemaVersion: "cache-v2-schema-v1",
@@ -195,11 +195,15 @@ for (const result of [
   });
 }
 
-test("TTL IMEI ausente registra skipped e não escreve", async () => {
+test("TTL IMEI sem override usa default independente de 30 dias", async () => {
   const fixture = scenario({ imei: imeiResult("IMEI_OK") });
   await fixture.execute({ ...SYNTHETIC_INPUT, imeiCode: "490154203237518" });
-  assert.equal(fixture.calls.imeiWrites.length, 0);
-  assert.ok(fixture.calls.telemetry.some((event) => event.reason === "TTL_NOT_CONFIGURED"));
+  assert.equal(fixture.calls.imeiWrites.length, 1);
+  const written = fixture.calls.imeiWrites[0];
+  assert.equal(
+    (Date.parse(written.expiresAt) - Date.parse(written.fetchedAt)) / 86400000,
+    30
+  );
 });
 
 test("buildReplayInput é determinístico e exclui campos técnicos", () => {

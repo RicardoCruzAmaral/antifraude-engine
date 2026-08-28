@@ -35,9 +35,9 @@ Os adapters TechTrail e IMEI.info ficam em `src/infrastructure/providers`. Cache
 - Estratégia explícita para indisponibilidade de providers e persistência.
 - Segurança, privacidade, retenção e mascaramento de dados sensíveis.
 
-## Cache V2 — SHADOW WRITE AVAILABLE / TECHTRAIL READ BEHIND FLAG
+## Cache V2 — SHADOW WRITE AVAILABLE / EVIDENCE READS BEHIND FLAGS
 
-A fundação do Cache V2 existe em paralelo ao `decision_cache` V1. Quando `CACHE_V2_WRITE_ENABLED=true`, o composition root injeta writers shadow best-effort. A única leitura V2 disponível é TechTrail, separadamente controlada por `CACHE_V2_READ_TECHTRAIL_ENABLED`; ela evita o provider em HIT, mas nunca reutiliza uma decisão. IMEI e Replay reads permanecem inativos. Com as flags desligadas, nenhuma dependência V2 é necessária. O `decision_cache` V1 continua ativo por default.
+A fundação do Cache V2 existe em paralelo ao `decision_cache` V1. Quando `CACHE_V2_WRITE_ENABLED=true`, o composition root injeta writers shadow best-effort. As leituras TechTrail e IMEI são controladas independentemente por flags; um HIT evita o respectivo provider, mas nunca reutiliza uma decisão. Analysis Replay read permanece inativo. Com as flags desligadas, nenhuma dependência V2 é necessária. O `decision_cache` V1 continua ativo por default.
 
 Os mecanismos planejados são independentes:
 
@@ -49,12 +49,12 @@ Os mecanismos planejados são independentes:
 
 O cache TechTrail representa a pessoa/CPF. Alterar `proposalId`, email, telefone, CEP, valor, produto, modelo declarado, IMEI, fingerprint, `visitorId` ou canal não invalida automaticamente a evidência durante seu TTL. Motivos eventualmente influenciados pelo contexto da primeira consulta também permanecem na evidência durante esse período. Essa limitação é consciente e deverá ser reavaliada com dados de produção.
 
-O TTL TechTrail é configurado por `TECHTRAIL_CACHE_TTL_DAYS`, com default inicial de 30 dias. O IMEI possui configuração independente, `IMEI_CACHE_TTL_DAYS`, deliberadamente sem default até uma política ser aprovada. Sem TTL IMEI, o shadow write é registrado como skipped. O replay segue a mesma regra com `ANALYSIS_REPLAY_TTL_DAYS`, também sem default funcional.
+Os TTLs TechTrail e IMEI possuem defaults iniciais de 30 dias em `TECHTRAIL_CACHE_TTL_DAYS` e `IMEI_CACHE_TTL_DAYS`. São configurações independentes e cada uma aceita override próprio. O replay continua sem default funcional em `ANALYSIS_REPLAY_TTL_DAYS`.
 
 Shadow writes aceitos:
 
 - TechTrail: somente resposta `ok` com summary; identidade da pessoa pelo token HMAC do CPF.
-- IMEI: `IMEI_OK`, `IMEI_INVALID` e `IMEI_BRAND_MISMATCH` são evidências semânticas; `IMEI_FAIL`, timeout e erros técnicos não são persistidos no V2.
+- IMEI: fatos válidos equivalentes a `IMEI_OK`/`IMEI_INVALID` são persistidos; mismatch e marca esperada são contexto da proposta e são reaplicados na leitura. `IMEI_FAIL`, timeout e erros técnicos não são persistidos no V2.
 - Replay: resposta concluída do engine ou cache V1, somente quando o TTL foi configurado. O replay é gravado, mas nunca consultado para responder nesta fase.
 
 A telemetria shadow usa um sink interno separado. Ela não é adicionada aos `events` públicos do response, preservando o contrato HTTP e o golden master.
@@ -81,7 +81,7 @@ Os defaults preservam integralmente o V1:
 - `CACHE_V2_READ_IMEI_ENABLED=false`;
 - `DECISION_CACHE_V1_READ_ENABLED=true`.
 
-`CACHE_V2_READ_IMEI_ENABLED` e `ANALYSIS_REPLAY_ENABLED` continuam não consumidas pelo fluxo. Shadow write é controlado exclusivamente por `CACHE_V2_WRITE_ENABLED`.
+`ANALYSIS_REPLAY_ENABLED` continua sem leitura no fluxo. Shadow write é controlado exclusivamente por `CACHE_V2_WRITE_ENABLED`.
 
 ## TechTrail Cache V2 READ — AVAILABLE BEHIND FLAG
 
@@ -95,4 +95,16 @@ A identidade consultada é o token HMAC do CPF, provider e versões de contrato,
 
 Um HIT não cria `enrichment_raw`, não renova `fetchedAt`/`expiresAt` e não dispara shadow write da mesma evidência. Provenance (`state`, source, fetched/expiry e `rawReference`) é acrescentada somente à cópia dos events persistida em `decision_log`; não aparece nos events do response. Para preservar a sequência pública histórica, o step legado `enrichment_raw_saved` continua presente no response mesmo no HIT, embora nenhuma inserção raw seja executada — débito semântico de observabilidade já conhecido.
 
-IMEI Evidence Cache e Analysis Replay continuam sem qualquer leitura ativa.
+## IMEI Cache V2 READ — AVAILABLE BEHIND FLAG
+
+`CACHE_V2_READ_IMEI_ENABLED=false` é o default. Quando habilitada, a leitura ocorre somente depois da pré-avaliação e de qualquer hard block, e somente quando há `imeiCode`. A identidade é: token HMAC do IMEI normalizado + provider + serviço/produto atual + versões do contrato do provider, normalizer e schema. CPF, proposta, valor, dados de contato, fingerprint e modelo declarado não entram diretamente na chave; o serviço permanece porque identifica o produto factual consultado no provider atual.
+
+- `HIT` fresh, `COMPLETE` e compatível: evita a chamada paga ao IMEI.info e reutiliza somente a evidência factual; score, reasons, profile e decisão são recalculados.
+- `MISS`, `EXPIRED`, `INCOMPATIBLE` ou `BACKEND_ERROR`: chama o provider exatamente uma vez, sem stale-while-revalidate.
+- HMAC/config/adapter indisponível: bypass best-effort e chamada normal ao provider.
+
+A evidência factual não persiste `brandExpected` nem um `IMEI_BRAND_MISMATCH` contextual. Na leitura, a marca retornada é comparada novamente com `modelo_declarado` da proposta atual. O normalizer IMEI foi versionado como `imei-normalizer-v2`, invalidando automaticamente artefatos antigos que congelavam mismatch. A seleção do serviço real e a semântica do provider permanecem inalteradas.
+
+Um HIT não cria `imei_raw`, não renova `fetchedAt`/`expiresAt` e não dispara shadow rewrite. Proveniência (source, artifact/reference, fetched/expiry, age, provider e service) fica somente na auditoria interna; o contrato HTTP público não muda. `IMEI_CACHE_TTL_DAYS` tem default independente de 30 dias e aceita override por ENV.
+
+Analysis Replay read continua inexistente.

@@ -13,6 +13,8 @@ import { createHmacLookupTokenServiceFromEnv } from "../src/infrastructure/secur
 import { consoleCacheV2ShadowTelemetry } from "../src/infrastructure/telemetry/consoleCacheV2ShadowTelemetry";
 import type { CacheV2ShadowDependencies } from "../src/application/cacheV2/shadowWriter";
 import type { TechTrailReadDependencies } from "../src/application/cacheV2/techTrailReader";
+import type { ImeiReadDependencies } from "../src/application/cacheV2/imeiReader";
+import { resolveImeiLookupContext } from "../src/providers/imei";
 
 function envInt(name: string, fallback: number) {
   const value = Number(process.env[name]);
@@ -42,6 +44,7 @@ function resolveConfig(): AnalyzeAntifraudConfig {
 type CacheV2Composition = {
   shadow?: CacheV2ShadowDependencies;
   techTrailRead?: TechTrailReadDependencies;
+  imeiRead?: ImeiReadDependencies;
   decisionCacheV1ReadEnabled: boolean;
 };
 
@@ -58,7 +61,7 @@ function composeCacheV2(traceId: string): CacheV2Composition {
     });
     return { decisionCacheV1ReadEnabled: true };
   }
-  if (!config.writeEnabled && !config.readTechTrailEnabled) {
+  if (!config.writeEnabled && !config.readTechTrailEnabled && !config.readImeiEnabled) {
     return { decisionCacheV1ReadEnabled: config.decisionCacheV1ReadEnabled };
   }
 
@@ -91,7 +94,7 @@ function composeCacheV2(traceId: string): CacheV2Composition {
     techTrailProviderContractVersion: "techtrail-person-v1",
     techTrailNormalizerVersion: "techtrail-normalizer-v1",
     imeiProviderContractVersion: "imei-info-v1",
-    imeiNormalizerVersion: "imei-normalizer-v1",
+    imeiNormalizerVersion: "imei-normalizer-v2",
   };
   const shadow: CacheV2ShadowDependencies | undefined = config.writeEnabled ? {
     analysisReplayRepository: adapters?.analysisReplayRepository ?? null,
@@ -113,9 +116,20 @@ function composeCacheV2(traceId: string): CacheV2Composition {
     normalizerVersion: versions.techTrailNormalizerVersion,
     cacheSchemaVersion: versions.cacheSchemaVersion,
   } : undefined;
+  const imeiRead: ImeiReadDependencies | undefined = config.readImeiEnabled ? {
+    imeiEvidenceCache: adapters?.imeiEvidenceCache ?? null,
+    lookupTokenService,
+    telemetry: consoleCacheV2ShadowTelemetry,
+    provider: "imei_info",
+    providerContractVersion: versions.imeiProviderContractVersion,
+    normalizerVersion: versions.imeiNormalizerVersion,
+    cacheSchemaVersion: versions.cacheSchemaVersion,
+    resolveContext: resolveImeiLookupContext,
+  } : undefined;
   return {
     shadow,
     techTrailRead,
+    imeiRead,
     decisionCacheV1ReadEnabled: config.decisionCacheV1ReadEnabled,
   };
 }
@@ -139,6 +153,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       providerRawRepository: persistence?.providerRawRepository ?? null,
       cacheV2Shadow: cacheV2.shadow,
       cacheV2TechTrailRead: cacheV2.techTrailRead,
+      cacheV2ImeiRead: cacheV2.imeiRead,
     });
     const result = await useCase.execute({
       body: req.body,
