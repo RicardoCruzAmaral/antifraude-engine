@@ -37,6 +37,38 @@ export type CacheV2ShadowDependencies = {
   versions: CacheV2ShadowVersions;
 };
 
+export type ReplayTechnicalFailureReason =
+  | "TECHTRAIL_TECHNICAL_FAILURE"
+  | "IMEI_BLACKLIST_UNAVAILABLE"
+  | "IMEI_TECHNICAL_FAILURE";
+
+export type ReplayEligibility =
+  | { eligible: true }
+  | { eligible: false; reason: ReplayTechnicalFailureReason };
+
+export function evaluateReplayEligibility(input: {
+  techTrailTechnicalFailure?: boolean;
+  imeiBlacklistStatus?: ImeiBlacklistEvidence["status"] | null;
+  imeiResult?: NormalizedImeiResult | null;
+  cachedReasons?: readonly string[];
+}): ReplayEligibility {
+  const cachedReasons = new Set(input.cachedReasons ?? []);
+  if (input.techTrailTechnicalFailure ||
+      cachedReasons.has("ENRICHMENT_TIMEOUT") ||
+      cachedReasons.has("ENRICHMENT_FAILED")) {
+    return { eligible: false, reason: "TECHTRAIL_TECHNICAL_FAILURE" };
+  }
+  if (input.imeiBlacklistStatus === "UNAVAILABLE") {
+    return { eligible: false, reason: "IMEI_BLACKLIST_UNAVAILABLE" };
+  }
+  if (input.imeiResult?.reason === "IMEI_FAIL" ||
+      input.imeiResult?.timedOut === true ||
+      cachedReasons.has("IMEI_FAIL")) {
+    return { eligible: false, reason: "IMEI_TECHNICAL_FAILURE" };
+  }
+  return { eligible: true };
+}
+
 function addDays(iso: string, days: number) {
   const date = new Date(iso);
   date.setUTCDate(date.getUTCDate() + days);
@@ -195,8 +227,17 @@ export async function shadowWriteReplay(
     statusCode: number;
     responseBody: unknown;
     createdAt: string;
+    eligibility: ReplayEligibility;
   }
 ) {
+  if (!input.eligibility.eligible) {
+    emit(dependencies, {
+      name: "cache_v2_replay_write_skipped_technical_failure",
+      traceId: input.traceId,
+      reason: input.eligibility.reason,
+    });
+    return;
+  }
   if (dependencies.replayTtlDays === null) {
     emit(dependencies, { name: "cache_v2_replay_write_skipped", traceId: input.traceId, reason: "TTL_NOT_CONFIGURED" });
     return;

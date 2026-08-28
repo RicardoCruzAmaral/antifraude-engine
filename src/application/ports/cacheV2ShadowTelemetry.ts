@@ -9,6 +9,7 @@ export type CacheV2ShadowEvent = {
     | "cache_v2_replay_write_success"
     | "cache_v2_replay_write_error"
     | "cache_v2_replay_write_skipped"
+    | "cache_v2_replay_write_skipped_technical_failure"
     | "cache_v2_replay_read_hit"
     | "cache_v2_replay_read_miss"
     | "cache_v2_replay_read_expired"

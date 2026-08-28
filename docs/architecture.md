@@ -137,7 +137,9 @@ analysisPolicyVersion = score-v1 | política IMEI | cfg:<SHA-256>
 ```
 
 Exemplos de prefixo são `score-v1|imei-legacy-v1|cfg:` e
-`score-v1|imei-blacklist-v1|cfg:`. O hash é o
+`score-v1|imei-blacklist-v2|cfg:`. O bump interno para `imei-blacklist-v2`
+invalida naturalmente Replays produzidos antes do suporte a `Done` e polling,
+sem alterar o `ruleVersion` HTTP público. O hash é o
 `decisionConfigFingerprint`: uma serialização canônica dos valores
 efetivamente resolvidos para pesos de score, penalidade IMEI, modo e falha do
 enrichment e timeouts dos providers. Os limites de profile atuais (`10/25/45`)
@@ -172,6 +174,8 @@ entre configurações decisórias diferentes.
 - `ANALYSIS_REPLAY_TTL_DAYS` possui default independente de 30 dias e aceita override positivo por ENV.
 
 A telemetria de Replay é interna (`hit`, `miss`, `expired`, `incompatible`, `backend_error` e `bypass`) e não altera o body armazenado nem o contrato HTTP público.
+
+Replay write exige conclusão sem falha técnica transitória. Falha do TechTrail, `UNAVAILABLE` do IMEI Blacklist e `IMEI_FAIL` legado fazem skip com telemetria interna `cache_v2_replay_write_skipped_technical_failure`; isso inclui timeout, erro HTTP/provider e indisponibilidade de configuração representados por esses resultados. Decisões normais, hard blocks, `CLEAN`, `BLACKLISTED`, `UNKNOWN` factual e `IMEI_INVALID` determinístico continuam elegíveis. Essa regra não altera a elegibilidade independente do evidence cache.
 
 ## TechTrail Cache V2 READ — AVAILABLE BEHIND FLAG
 
@@ -229,6 +233,14 @@ A evidência normalizada suporta somente: status, model, modelName, manufacturer
 - `UNAVAILABLE`: configuração/API key ausente, timeout, exception, HTTP não-2xx, JSON inválido, rejeição genérica ou IMEI retornado divergente.
 
 Somente validação local inválida ou retorno explícito `Invalid IMEI` produz `IMEI_INVALID`; rejeições técnicas não são convertidas em fraude.
+
+### Protocolo assíncrono IMEI.info Blacklist
+
+A submissão paga continua sendo feita uma única vez em `GET /api-sync/check/{serviceId}`, com `API_KEY` e o IMEI sanitizado. O adapter aceita tanto um resultado final imediato com status `Done` quanto a resposta intermediária oficial (`HTTP 202` ou status como `In_progress`/`Processing`). Quando a consulta ainda está em processamento, o identificador retornado (`history_id`, `id` ou `ulid`) é preservado e o mesmo job é consultado por `GET /api/search_history/{id}/`; polling nunca resubmete o IMEI ao endpoint pago.
+
+Submissão e polling compartilham um único deadline definido por `IMEI_TIMEOUT_MS`, um único `AbortController` e intervalo curto entre consultas. `Done` é normalizado normalmente para `CLEAN`, `BLACKLISTED` ou `UNKNOWN`. Somente `Rejected` produz `PROVIDER_REJECTED`; `Refunded`, envelope inválido, erro HTTP/JSON e falha de polling continuam técnicos. Se o job permanecer pendente até o deadline, o resultado é `UNAVAILABLE` com motivo interno `PENDING_TIMEOUT`, sem pontos antifraude e sem evidência reutilizável no Cache V2.
+
+Quando disponível, a auditoria preserva uma referência interna no formato `imei-info-search:{id}` e o envelope retornado, sem registrar a API key. Analysis Replay antecede o provider, mas a política interna `imei-blacklist-v2` torna incompatíveis os Replays anteriores que poderiam conter `UNAVAILABLE`; novos resultados técnicos também não são persistidos. Smoke tests controlados ainda devem usar um novo `proposalId` para isolamento operacional (e nunca repetir uma submissão paga apenas para contornar Replay).
 
 ### Cache, versões e decisão
 

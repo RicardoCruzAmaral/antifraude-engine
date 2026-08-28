@@ -11,6 +11,7 @@ import type {
 } from "../ports";
 import type { CacheV2ShadowDependencies } from "../cacheV2/shadowWriter";
 import {
+  evaluateReplayEligibility,
   shadowWriteImei,
   shadowWriteImeiBlacklist,
   shadowWriteReplay,
@@ -354,6 +355,7 @@ export class AnalyzeAntifraudUseCase {
           statusCode: 200,
           responseBody,
           createdAt: nowIso(),
+          eligibility: evaluateReplayEligibility({ cachedReasons: hit.reasons }),
         });
       }
       return { statusCode: 200, body: responseBody };
@@ -479,6 +481,7 @@ export class AnalyzeAntifraudUseCase {
     let isTechFail = false;
     let isHardBlock = false;
     let imeiResultGlobal: NormalizedImeiResult | null = null;
+    let imeiBlacklistResultGlobal: ImeiBlacklistEvidence | null = null;
 
     if (enrichResult?.ok && enrichResult?.summary) {
       const preEvaluation = preEvaluate(enrichResult, inputSummary, decisionScoreConfig);
@@ -604,6 +607,7 @@ export class AnalyzeAntifraudUseCase {
           }
 
           if (blacklistResult) {
+            imeiBlacklistResultGlobal = blacklistResult;
             if (blacklistResult.status === "INVALID") {
               imeiResultGlobal = {
                 ok: false, provider: "imei_info", ms: 0, reason: "IMEI_INVALID",
@@ -820,6 +824,11 @@ export class AnalyzeAntifraudUseCase {
         statusCode: 200,
         responseBody,
         createdAt: nowIso(),
+        eligibility: evaluateReplayEligibility({
+          techTrailTechnicalFailure: isTechFail,
+          imeiBlacklistStatus: imeiBlacklistResultGlobal?.status ?? null,
+          imeiResult: imeiResultGlobal,
+        }),
       });
     }
     return { statusCode: 200, body: responseBody };

@@ -76,6 +76,31 @@ function hitFor(key, result, overrides = {}) {
   };
 }
 
+function blacklistEvidence(status, technicalReason = null) {
+  const clean = status === "CLEAN";
+  const blacklisted = status === "BLACKLISTED";
+  return {
+    imei: "490154203237518",
+    provider: "imei_info",
+    service: "blacklist:777",
+    status,
+    model: "Synthetic",
+    modelName: "Synthetic Phone",
+    manufacturer: "Synthetic Corp",
+    blacklistStatusRaw: clean ? "Clean" : blacklisted ? "Blacklisted" : "Pending",
+    generalListStatus: clean ? "No" : blacklisted ? "Yes" : null,
+    blacklistRecords: clean ? 0 : blacklisted ? 1 : null,
+    deviceIsClean: clean ? true : blacklisted ? false : null,
+    providerCreatedAt: "2026-08-01T00:00:00.000Z",
+    fetchedAt: new Date(Date.now() - 1000).toISOString(),
+    rawReference: "imei-info-search:synthetic",
+    httpStatus: status === "UNAVAILABLE" ? 503 : 200,
+    latencyMs: 5,
+    technicalReason,
+    raw: { synthetic: true },
+  };
+}
+
 function fixture(options = {}) {
   const calls = {
     enrichment: 0,
@@ -128,7 +153,7 @@ function fixture(options = {}) {
     imeiProvider: {
       async check() {
         calls.imei += 1;
-        return imeiResult("IMEI_OK");
+        return options.imeiResult ?? imeiResult("IMEI_OK");
       },
     },
     imeiBlacklistProvider: {
@@ -331,11 +356,110 @@ for (const [fromBlacklist, toBlacklist] of [[false, true], [true, false]]) {
     await run.execute({ ...SYNTHETIC_INPUT, imeiCode: null }, { imeiBlacklistV1Enabled: toBlacklist });
     assert.equal(run.calls.enrichment, before + 1);
     assert.match(run.replay.calls.gets[0].analysisPolicyVersion,
-      new RegExp(`^score-v1\\|imei-${fromBlacklist ? "blacklist" : "legacy"}-v1\\|cfg:[a-f0-9]{64}$`));
+      new RegExp(`^score-v1\\|imei-${fromBlacklist ? "blacklist-v2" : "legacy-v1"}\\|cfg:[a-f0-9]{64}$`));
     assert.match(run.replay.calls.gets[1].analysisPolicyVersion,
-      new RegExp(`^score-v1\\|imei-${toBlacklist ? "blacklist" : "legacy"}-v1\\|cfg:[a-f0-9]{64}$`));
+      new RegExp(`^score-v1\\|imei-${toBlacklist ? "blacklist-v2" : "legacy-v1"}\\|cfg:[a-f0-9]{64}$`));
   });
 }
+
+test("Replay imei-blacklist-v1 produz MISS sob v2 e o mesmo input v2 continua compatível", async () => {
+  const run = fixture({ shadow: true });
+  const body = { ...SYNTHETIC_INPUT, imeiCode: null };
+  const blacklistConfig = { imeiBlacklistV1Enabled: true };
+
+  await run.execute(body, blacklistConfig);
+  const v2Entry = run.replay.calls.puts[0];
+  assert.match(v2Entry.analysisPolicyVersion,
+    /^score-v1\|imei-blacklist-v2\|cfg:[a-f0-9]{64}$/);
+
+  run.replay.entries.clear();
+  const oldEntry = {
+    ...v2Entry,
+    analysisPolicyVersion: v2Entry.analysisPolicyVersion.replace("imei-blacklist-v2", "imei-blacklist-v1"),
+  };
+  run.replay.entries.set(keyOf(oldEntry), oldEntry);
+
+  await run.execute(body, blacklistConfig);
+  assert.equal(run.calls.enrichment, 2);
+  assert.equal(run.replay.calls.puts.length, 2);
+  assert.match(run.replay.calls.puts[1].analysisPolicyVersion,
+    /^score-v1\|imei-blacklist-v2\|cfg:[a-f0-9]{64}$/);
+
+  await run.execute(body, blacklistConfig);
+  assert.equal(run.calls.enrichment, 2);
+  assert.equal(run.replay.calls.puts.length, 2);
+});
+
+for (const [label, technicalReason] of [
+  ["UNAVAILABLE", "PROVIDER_UNAVAILABLE"],
+  ["timeout", "PENDING_TIMEOUT"],
+  ["provider rejected", "PROVIDER_REJECTED"],
+]) {
+  test(`IMEI Blacklist ${label} não grava Replay`, async () => {
+    const run = fixture({
+      shadow: true,
+      enrichment: enrichmentResult(enrichmentSummary({
+        riscoCredito: "ALTO",
+        probabilidadePagamento: "ALTISSIMA",
+      })),
+      blacklistResult: blacklistEvidence("UNAVAILABLE", technicalReason),
+    });
+    await run.execute(undefined, { imeiBlacklistV1Enabled: true });
+    assert.equal(run.replay.calls.puts.length, 0);
+    assert.ok(run.calls.telemetry.some((event) =>
+      event.name === "cache_v2_replay_write_skipped_technical_failure" &&
+      event.reason === "IMEI_BLACKLIST_UNAVAILABLE"));
+  });
+}
+
+for (const status of ["CLEAN", "BLACKLISTED", "UNKNOWN"]) {
+  test(`IMEI Blacklist ${status} factual continua elegível para Replay`, async () => {
+    const run = fixture({
+      shadow: true,
+      enrichment: enrichmentResult(enrichmentSummary({
+        riscoCredito: "ALTO",
+        probabilidadePagamento: "ALTISSIMA",
+      })),
+      blacklistResult: blacklistEvidence(status),
+    });
+    await run.execute(undefined, { imeiBlacklistV1Enabled: true });
+    assert.equal(run.replay.calls.puts.length, 1);
+  });
+}
+
+test("falha técnica TechTrail não grava Replay", async () => {
+  const run = fixture({
+    shadow: true,
+    enrichment: {
+      ok: false, mode: "real", provider: "techtrail", ms: 5,
+      httpStatus: 503, requestParams: null, raw: null, summary: null,
+      error: { msg: "HTTP_ERROR" },
+    },
+  });
+  await run.execute({ ...SYNTHETIC_INPUT, imeiCode: null });
+  assert.equal(run.replay.calls.puts.length, 0);
+  assert.ok(run.calls.telemetry.some((event) =>
+    event.name === "cache_v2_replay_write_skipped_technical_failure" &&
+    event.reason === "TECHTRAIL_TECHNICAL_FAILURE"));
+});
+
+test("timeout técnico do IMEI legado não grava Replay", async () => {
+  const run = fixture({
+    shadow: true,
+    imeiResult: { ...imeiResult("IMEI_FAIL"), timedOut: true, httpStatus: null },
+  });
+  await run.execute();
+  assert.equal(run.replay.calls.puts.length, 0);
+  assert.ok(run.calls.telemetry.some((event) =>
+    event.name === "cache_v2_replay_write_skipped_technical_failure" &&
+    event.reason === "IMEI_TECHNICAL_FAILURE"));
+});
+
+test("decisão normal sem falha técnica continua elegível para Replay", async () => {
+  const run = fixture({ shadow: true });
+  await run.execute({ ...SYNTHETIC_INPUT, imeiCode: null });
+  assert.equal(run.replay.calls.puts.length, 1);
+});
 
 test("mesma request e mesmos pesos permite HIT; alterar um peso força MISS", async () => {
   const run = fixture({ shadow: true });
