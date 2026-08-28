@@ -6,6 +6,13 @@ import type {
   ImeiProvider,
   ProviderRawRepository,
 } from "../ports";
+import type { CacheV2ShadowDependencies } from "../cacheV2/shadowWriter";
+import {
+  shadowWriteImei,
+  shadowWriteReplay,
+  shadowWriteTechTrail,
+} from "../cacheV2/shadowWriter";
+export { buildReplayInput } from "../cacheV2/replayInput";
 import type {
   Decision,
   InputSummary,
@@ -20,6 +27,7 @@ export type AnalyzeAntifraudDependencies = {
   decisionCache: DecisionCache | null;
   decisionAuditRepository: DecisionAuditRepository | null;
   providerRawRepository: ProviderRawRepository | null;
+  cacheV2Shadow?: CacheV2ShadowDependencies;
 };
 
 export type AnalyzeAntifraudConfig = {
@@ -123,9 +131,16 @@ export class AnalyzeAntifraudUseCase {
       decisionCache,
       decisionAuditRepository,
       providerRawRepository,
+      cacheV2Shadow,
     } = this.dependencies;
     const hasPersistence = !!decisionCache && !!decisionAuditRepository && !!providerRawRepository;
     const events: any[] = [];
+    let techTrailShadowCandidate: { cpf: string; result: any; fetchedAt: string } | null = null;
+    let imeiShadowCandidate: {
+      imeiCode: string;
+      result: NormalizedImeiResult;
+      fetchedAt: string;
+    } | null = null;
     const mark = (step: string, ok: boolean, meta?: any) => {
       events.push({ ts: nowIso(), ms: Date.now() - started, step, ok, meta: meta ?? undefined });
     };
@@ -217,6 +232,16 @@ export class AnalyzeAntifraudUseCase {
           console.error("[decision_log] insert failed", { trace_id: traceId, err });
         }
       }
+      if (cacheV2Shadow) {
+        await shadowWriteReplay(cacheV2Shadow, {
+          traceId,
+          inputSummary,
+          ruleVersion: hit.ruleVersion,
+          statusCode: 200,
+          responseBody,
+          createdAt: nowIso(),
+        });
+      }
       return { statusCode: 200, body: responseBody };
     }
 
@@ -278,6 +303,11 @@ export class AnalyzeAntifraudUseCase {
     } else {
       mark("enrichment_raw_skipped_no_supabase", true);
     }
+    techTrailShadowCandidate = {
+      cpf,
+      result: enrichResult,
+      fetchedAt: new Date(enrichStarted).toISOString(),
+    };
 
     let decision: Decision;
     let reasons: string[] = [];
@@ -313,6 +343,7 @@ export class AnalyzeAntifraudUseCase {
             hasImei: true,
             modeloDeclarado: inputSummary.modelo_declarado ?? null,
           });
+          const imeiStartedAt = nowIso();
           imeiResult = await imeiProvider.check({
             imeiCode: inputSummary.imeiCode,
             modeloDeclarado: inputSummary.modelo_declarado,
@@ -331,6 +362,11 @@ export class AnalyzeAntifraudUseCase {
               console.error("[imei_raw] insert failed", err);
             }
           }
+          imeiShadowCandidate = {
+            imeiCode: inputSummary.imeiCode,
+            result: imeiResult,
+            fetchedAt: imeiStartedAt,
+          };
           mark("imei_check_done", imeiResult.ok, {
             reason: imeiResult.reason,
             provider: imeiResult.provider,
@@ -427,6 +463,28 @@ export class AnalyzeAntifraudUseCase {
       } catch (err) {
         console.error("[decision_log] insert failed", { trace_id: traceId, err });
       }
+    }
+    if (cacheV2Shadow) {
+      if (techTrailShadowCandidate) {
+        await shadowWriteTechTrail(cacheV2Shadow, {
+          traceId,
+          ...techTrailShadowCandidate,
+        });
+      }
+      if (imeiShadowCandidate) {
+        await shadowWriteImei(cacheV2Shadow, {
+          traceId,
+          ...imeiShadowCandidate,
+        });
+      }
+      await shadowWriteReplay(cacheV2Shadow, {
+        traceId,
+        inputSummary,
+        ruleVersion,
+        statusCode: 200,
+        responseBody,
+        createdAt: nowIso(),
+      });
     }
     return { statusCode: 200, body: responseBody };
   }

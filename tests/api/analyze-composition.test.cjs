@@ -90,3 +90,28 @@ test("composition root injeta adapters concretos sem rede real", async () => {
     }
   });
 });
+
+test("CACHE_V2_WRITE_ENABLED=false não injeta shadow", async () => {
+  await withIsolatedEnvironmentAsync({ CACHE_V2_WRITE_ENABLED: "false" }, async () => {
+    const loaded = loadAnalyzeForCharacterization({
+      mockUseCase: true,
+      useCaseResult: { statusCode: 200, body: { ok: true } },
+    });
+    const res = response();
+    await loaded.exports.default({ method: "POST", body: { cpf: "123" } }, res);
+    assert.equal(loaded.calls.useCaseConstruct[0].cacheV2Shadow, undefined);
+  });
+});
+
+test("shadow habilitado sem HMAC não derruba composição V1", async () => {
+  await withIsolatedEnvironmentAsync({ CACHE_V2_WRITE_ENABLED: "true" }, async () => {
+    const loaded = loadAnalyzeForCharacterization({
+      mockUseCase: true,
+      useCaseResult: { statusCode: 200, body: { ok: true } },
+    });
+    const res = response();
+    await withMutedConsoleAsync(() => loaded.exports.default({ method: "POST", body: { cpf: "123" } }, res));
+    assert.equal(res.statusCode, 200);
+    assert.equal(loaded.calls.useCaseConstruct[0].cacheV2Shadow.lookupTokenService, null);
+  });
+});

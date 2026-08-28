@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "type": "commonjs",
   "scripts": {
-    "test": "node --test tests/characterization/engine-rules.test.cjs tests/characterization/analyze-imei.test.cjs tests/characterization/analyze-persistence.test.cjs tests/application/analyze-antifraud.test.cjs tests/api/analyze-composition.test.cjs tests/architecture/layers.test.cjs tests/infrastructure/cache-v2-foundation.test.cjs tests/golden-master/current-engine-v1.test.cjs",
+    "test": "node --test tests/characterization/engine-rules.test.cjs tests/characterization/analyze-imei.test.cjs tests/characterization/analyze-persistence.test.cjs tests/application/analyze-antifraud.test.cjs tests/application/cache-v2-shadow-write.test.cjs tests/api/analyze-composition.test.cjs tests/architecture/layers.test.cjs tests/infrastructure/cache-v2-foundation.test.cjs tests/golden-master/current-engine-v1.test.cjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

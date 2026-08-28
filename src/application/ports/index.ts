@@ -45,3 +45,7 @@ export type {
   ImeiEvidenceKey,
 } from "./imeiEvidenceCache";
 export type { LookupTokenService } from "./lookupTokenService";
+export type {
+  CacheV2ShadowEvent,
+  CacheV2ShadowTelemetry,
+} from "./cacheV2ShadowTelemetry";

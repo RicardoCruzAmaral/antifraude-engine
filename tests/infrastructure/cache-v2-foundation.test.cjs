@@ -41,19 +41,29 @@ test("configuração V2 preserva defaults inativos e TTL TechTrail de 30 dias", 
       decisionCacheV1ReadEnabled: true,
       techTrailTtlDays: 30,
       imeiTtlDays: null,
+      replayTtlDays: null,
     });
   });
 });
 
-test("TTL TechTrail é configurável e IMEI não recebe default silencioso", () => {
+test("TTLs configuráveis preservam ausência de defaults IMEI/replay", () => {
   withIsolatedEnvironment({ TECHTRAIL_CACHE_TTL_DAYS: "12" }, () => {
     const config = foundation.config.resolveCacheV2Config();
     assert.equal(config.techTrailTtlDays, 12);
     assert.equal(config.imeiTtlDays, null);
+    assert.equal(config.replayTtlDays, null);
     assert.equal(
       foundation.config.evidenceExpiresAt("2026-08-01T00:00:00.000Z", config.techTrailTtlDays),
       "2026-08-13T00:00:00.000Z"
     );
+  });
+});
+
+test("TTLs IMEI e replay são lidos somente quando configurados", () => {
+  withIsolatedEnvironment({ IMEI_CACHE_TTL_DAYS: "7", ANALYSIS_REPLAY_TTL_DAYS: "2" }, () => {
+    const config = foundation.config.resolveCacheV2Config();
+    assert.equal(config.imeiTtlDays, 7);
+    assert.equal(config.replayTtlDays, 2);
   });
 });
 

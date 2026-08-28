@@ -35,9 +35,9 @@ Os adapters TechTrail e IMEI.info ficam em `src/infrastructure/providers`. Cache
 - Estratégia explícita para indisponibilidade de providers e persistência.
 - Segurança, privacidade, retenção e mascaramento de dados sensíveis.
 
-## Cache V2 — PLANNED / NOT ACTIVE
+## Cache V2 — SHADOW WRITE AVAILABLE / READ NOT ACTIVE
 
-A fundação do Cache V2 existe em paralelo ao `decision_cache` V1. Nenhum port ou adapter V2 está injetado no `AnalyzeAntifraudUseCase`; portanto, não há leitura, escrita ou mudança de decisão causada pelo V2 nesta etapa.
+A fundação do Cache V2 existe em paralelo ao `decision_cache` V1. Quando `CACHE_V2_WRITE_ENABLED=true`, o composition root injeta somente writers shadow best-effort. Nenhum cache V2 é lido, nenhum provider é pulado e nenhuma evidência V2 influencia score, reasons, profile ou decisão. Com a flag desligada, nenhuma dependência V2 é necessária e nenhuma escrita é tentada. O `decision_cache` V1 continua sendo consultado e gravado normalmente.
 
 Os mecanismos planejados são independentes:
 
@@ -49,7 +49,21 @@ Os mecanismos planejados são independentes:
 
 O cache TechTrail representa a pessoa/CPF. Alterar `proposalId`, email, telefone, CEP, valor, produto, modelo declarado, IMEI, fingerprint, `visitorId` ou canal não invalida automaticamente a evidência durante seu TTL. Motivos eventualmente influenciados pelo contexto da primeira consulta também permanecem na evidência durante esse período. Essa limitação é consciente e deverá ser reavaliada com dados de produção.
 
-O TTL TechTrail é configurado por `TECHTRAIL_CACHE_TTL_DAYS`, com default inicial de 30 dias. O IMEI possui configuração independente, `IMEI_CACHE_TTL_DAYS`, deliberadamente sem default até uma política ser aprovada.
+O TTL TechTrail é configurado por `TECHTRAIL_CACHE_TTL_DAYS`, com default inicial de 30 dias. O IMEI possui configuração independente, `IMEI_CACHE_TTL_DAYS`, deliberadamente sem default até uma política ser aprovada. Sem TTL IMEI, o shadow write é registrado como skipped. O replay segue a mesma regra com `ANALYSIS_REPLAY_TTL_DAYS`, também sem default funcional.
+
+Shadow writes aceitos:
+
+- TechTrail: somente resposta `ok` com summary; identidade da pessoa pelo token HMAC do CPF.
+- IMEI: `IMEI_OK`, `IMEI_INVALID` e `IMEI_BRAND_MISMATCH` são evidências semânticas; `IMEI_FAIL`, timeout e erros técnicos não são persistidos no V2.
+- Replay: resposta concluída do engine ou cache V1, somente quando o TTL foi configurado. O replay é gravado, mas nunca consultado para responder nesta fase.
+
+A telemetria shadow usa um sink interno separado. Ela não é adicionada aos `events` públicos do response, preservando o contrato HTTP e o golden master.
+
+### Replay input deliberado
+
+O hash canônico inclui: CPF, nome, email, telefone, CEP, valor, parceiro, canal, proposta, modelo declarado, IMEI e os campos de device atualmente devolvidos ou observados pelo motor (`ip`, `visitorId`, OS, GPU, cores, mobilidade, versão do OS, browser, dimensões de tela e provider do fingerprint).
+
+Ficam excluídos: `sessionId`, `collectedAt`, request IDs técnicos do fingerprint, timestamps de transporte, propriedades extras do device e a ordem das propriedades JSON. Esses campos não alteram hoje a decisão nem o snapshot público relevante. `ruleVersion` não entra no input hash porque participa separadamente da identidade e compatibilidade do replay.
 
 ### Raw e segurança
 
@@ -62,9 +76,9 @@ CPF e IMEI nunca são chaves cruas nas tabelas V2: são tokenizados por HMAC-SHA
 Os defaults preservam integralmente o V1:
 
 - `ANALYSIS_REPLAY_ENABLED=false`;
-- `CACHE_V2_WRITE_ENABLED=false`;
+- `CACHE_V2_WRITE_ENABLED=false` — quando `true`, habilita apenas shadow write;
 - `CACHE_V2_READ_TECHTRAIL_ENABLED=false`;
 - `CACHE_V2_READ_IMEI_ENABLED=false`;
 - `DECISION_CACHE_V1_READ_ENABLED=true`.
 
-As flags estão somente na configuração V2 não consumida pelo fluxo ativo. A primeira ativação proposta é shadow write, sem leitura V2.
+As flags de read continuam não consumidas pelo fluxo. `ANALYSIS_REPLAY_ENABLED` permanece reservado para a futura leitura/replay; shadow write é controlado exclusivamente por `CACHE_V2_WRITE_ENABLED`.

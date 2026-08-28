@@ -82,6 +82,7 @@ const ISOLATED_ENV_NAMES = [
   "DECISION_CACHE_V1_READ_ENABLED",
   "TECHTRAIL_CACHE_TTL_DAYS",
   "IMEI_CACHE_TTL_DAYS",
+  "ANALYSIS_REPLAY_TTL_DAYS",
 ];
 
 function transpileAnalyzeForCharacterization() {
