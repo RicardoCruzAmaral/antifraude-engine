@@ -56,12 +56,16 @@ export function createSupabaseCacheV2Adapters(client: SupabaseLike): SupabaseCac
           .select("proposal_id, input_hash, rule_version, cache_schema_version, result_json, created_at, expires_at")
           .eq("proposal_id", key.proposalId ?? "")
           .eq("input_hash", key.inputHash)
+          // The existing rule_version column is the internal policy namespace
+          // for replay. The public response ruleVersion remains independent.
+          .eq("rule_version", key.analysisPolicyVersion)
+          .eq("cache_schema_version", key.cacheSchemaVersion)
           .order("created_at", { ascending: false })
           .limit(1)
           .maybeSingle();
         if (error) return { state: "BACKEND_ERROR", errorCode: errorCode(error) };
         if (!data) return { state: "MISS" };
-        if (data.rule_version !== key.ruleVersion) return { state: "INCOMPATIBLE", reason: "RULE_VERSION" };
+        if (data.rule_version !== key.analysisPolicyVersion) return { state: "INCOMPATIBLE", reason: "ANALYSIS_POLICY_VERSION" };
         if (data.cache_schema_version !== key.cacheSchemaVersion) return { state: "INCOMPATIBLE", reason: "CACHE_SCHEMA_VERSION" };
         if (expired(data.expires_at)) return { state: "EXPIRED", expiredAt: data.expires_at };
         return {
@@ -70,7 +74,7 @@ export function createSupabaseCacheV2Adapters(client: SupabaseLike): SupabaseCac
           value: {
             proposalId: data.proposal_id || null,
             inputHash: data.input_hash,
-            ruleVersion: data.rule_version,
+            analysisPolicyVersion: data.rule_version,
             cacheSchemaVersion: data.cache_schema_version,
             result: data.result_json,
             createdAt: data.created_at,
@@ -85,7 +89,7 @@ export function createSupabaseCacheV2Adapters(client: SupabaseLike): SupabaseCac
       const { error } = await client.from("analysis_replay").upsert({
         proposal_id: entry.proposalId ?? "",
         input_hash: entry.inputHash,
-        rule_version: entry.ruleVersion,
+        rule_version: entry.analysisPolicyVersion,
         cache_schema_version: entry.cacheSchemaVersion,
         result_json: entry.result,
         created_at: entry.createdAt,

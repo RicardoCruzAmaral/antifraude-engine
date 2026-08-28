@@ -22,6 +22,11 @@ import type { ImeiReadDependencies } from "../cacheV2/imeiReader";
 import { readImeiEvidence } from "../cacheV2/imeiReader";
 import type { ImeiBlacklistReadDependencies } from "../cacheV2/imeiBlacklistReader";
 import { readImeiBlacklistEvidence } from "../cacheV2/imeiBlacklistReader";
+import type { AnalysisReplayReadDependencies } from "../cacheV2/analysisReplayReader";
+import {
+  readAnalysisReplay,
+  resolveAnalysisPolicyVersion,
+} from "../cacheV2/analysisReplayReader";
 export { buildReplayInput } from "../cacheV2/replayInput";
 import type {
   Decision,
@@ -51,6 +56,7 @@ export type AnalyzeAntifraudDependencies = {
   cacheV2TechTrailRead?: TechTrailReadDependencies;
   cacheV2ImeiRead?: ImeiReadDependencies;
   cacheV2ImeiBlacklistRead?: ImeiBlacklistReadDependencies;
+  cacheV2ReplayRead?: AnalysisReplayReadDependencies;
   imeiBlacklistTelemetry?: CacheV2ShadowTelemetry;
 };
 
@@ -76,7 +82,7 @@ export type AnalyzeAntifraudCommand = {
 };
 
 export type AnalyzeAntifraudResult = {
-  statusCode: 200 | 400 | 500;
+  statusCode: number;
   body: any;
 };
 
@@ -194,6 +200,7 @@ export class AnalyzeAntifraudUseCase {
       cacheV2TechTrailRead,
       cacheV2ImeiRead,
       cacheV2ImeiBlacklistRead,
+      cacheV2ReplayRead,
       imeiBlacklistTelemetry,
     } = this.dependencies;
     const hasPersistence = !!decisionCache && !!decisionAuditRepository && !!providerRawRepository;
@@ -248,6 +255,23 @@ export class AnalyzeAntifraudUseCase {
       return { statusCode: 400, body: { ok: false, traceId, error: "Missing cpf" } };
     }
     mark("validate_input", true);
+
+    const analysisPolicyVersion = resolveAnalysisPolicyVersion(
+      config.imeiBlacklistV1Enabled === true
+    );
+    if (cacheV2ReplayRead) {
+      const replay = await readAnalysisReplay(cacheV2ReplayRead, {
+        traceId,
+        inputSummary,
+        analysisPolicyVersion,
+      });
+      if (replay.state === "HIT") {
+        return {
+          statusCode: replay.result.statusCode,
+          body: replay.result.body,
+        };
+      }
+    }
 
     if (!hasPersistence) {
       const details = "Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY";
@@ -312,7 +336,7 @@ export class AnalyzeAntifraudUseCase {
         await shadowWriteReplay(cacheV2Shadow, {
           traceId,
           inputSummary,
-          ruleVersion: hit.ruleVersion,
+          analysisPolicyVersion,
           statusCode: 200,
           responseBody,
           createdAt: nowIso(),
@@ -778,7 +802,7 @@ export class AnalyzeAntifraudUseCase {
       await shadowWriteReplay(cacheV2Shadow, {
         traceId,
         inputSummary,
-        ruleVersion,
+        analysisPolicyVersion,
         statusCode: 200,
         responseBody,
         createdAt: nowIso(),

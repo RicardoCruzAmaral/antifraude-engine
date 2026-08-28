@@ -3,7 +3,7 @@ import type { CacheLookup } from "./cacheLookup";
 export type AnalysisReplayKey = {
   proposalId: string | null;
   inputHash: string;
-  ruleVersion: string;
+  analysisPolicyVersion: string;
   cacheSchemaVersion: string;
 };
 

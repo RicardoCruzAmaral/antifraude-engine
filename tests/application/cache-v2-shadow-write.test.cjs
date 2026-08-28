@@ -229,19 +229,19 @@ test("hash replay ignora ordem, muda com campo relevante e não inclui ruleVersi
   assert.notEqual(token.hashRelevantInput(replay), token.hashRelevantInput({ ...replay, valorCelular: 1 }));
 });
 
-test("TTL replay ausente registra skipped e não escreve", async () => {
+test("writer sem TTL de Replay registra skipped e não escreve", async () => {
   const fixture = scenario();
   await fixture.execute();
   assert.equal(fixture.calls.replayWrites.length, 0);
   assert.ok(fixture.calls.telemetry.some((event) => event.name === "cache_v2_replay_write_skipped"));
 });
 
-test("replay configurado grava resultado, hash e ruleVersion", async () => {
+test("replay configurado grava resultado, hash e analysisPolicyVersion", async () => {
   const fixture = scenario({ replayTtlDays: 2 });
   const result = await fixture.execute();
   const replay = fixture.calls.replayWrites[0];
   assert.equal(replay.proposalId, SYNTHETIC_INPUT.proposalId);
-  assert.equal(replay.ruleVersion, "score-v1");
+  assert.equal(replay.analysisPolicyVersion, "score-v1|imei-legacy-v1");
   assert.equal(replay.result.statusCode, 200);
   assert.equal(replay.result.body, result.body);
   assert.equal(typeof replay.inputHash, "string");

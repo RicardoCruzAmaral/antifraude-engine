@@ -35,13 +35,13 @@ Os adapters TechTrail e IMEI.info ficam em `src/infrastructure/providers`. Cache
 - Estratégia explícita para indisponibilidade de providers e persistência.
 - Segurança, privacidade, retenção e mascaramento de dados sensíveis.
 
-## Cache V2 — SHADOW WRITE AVAILABLE / EVIDENCE READS BEHIND FLAGS
+## Cache V2 — SHADOW WRITE / EVIDENCE READS / ANALYSIS REPLAY
 
-A fundação do Cache V2 existe em paralelo ao `decision_cache` V1. Quando `CACHE_V2_WRITE_ENABLED=true`, o composition root injeta writers shadow best-effort. As leituras TechTrail e IMEI são controladas independentemente por flags; um HIT evita o respectivo provider, mas nunca reutiliza uma decisão. Analysis Replay read permanece inativo. Com as flags desligadas, nenhuma dependência V2 é necessária. O `decision_cache` V1 continua ativo por default.
+A fundação do Cache V2 existe em paralelo ao `decision_cache` V1. Quando `CACHE_V2_WRITE_ENABLED=true`, o composition root injeta writers shadow best-effort. As leituras TechTrail, IMEI e Analysis Replay são controladas independentemente por flags. Evidence HIT evita o respectivo provider e recalcula a decisão; Replay HIT reutiliza somente uma resposta da mesma análise. Com as flags desligadas, nenhuma dependência V2 é necessária. O `decision_cache` V1 continua ativo por default.
 
 Os mecanismos planejados são independentes:
 
-1. `analysis_replay`: idempotência da mesma análise, identificada por `proposalId` opcional, HMAC canônico dos inputs relevantes, `ruleVersion` e versão do schema do cache.
+1. `analysis_replay`: idempotência da mesma análise, identificada por `proposalId` opcional, HMAC canônico dos inputs relevantes, `analysisPolicyVersion` e versão do schema do cache.
 2. `techtrail_evidence_cache`: evidência normalizada da pessoa. Sua identidade usa token HMAC do CPF, provider e versões de contrato, normalização e schema.
 3. `imei_evidence_cache`: evidência normalizada do aparelho. Sua identidade usa token HMAC do IMEI, provider, serviço/produto e versões.
 
@@ -49,21 +49,21 @@ Os mecanismos planejados são independentes:
 
 O cache TechTrail representa a pessoa/CPF. Alterar `proposalId`, email, telefone, CEP, valor, produto, modelo declarado, IMEI, fingerprint, `visitorId` ou canal não invalida automaticamente a evidência durante seu TTL. Motivos eventualmente influenciados pelo contexto da primeira consulta também permanecem na evidência durante esse período. Essa limitação é consciente e deverá ser reavaliada com dados de produção.
 
-Os TTLs TechTrail e IMEI possuem defaults iniciais de 30 dias em `TECHTRAIL_CACHE_TTL_DAYS` e `IMEI_CACHE_TTL_DAYS`. São configurações independentes e cada uma aceita override próprio. O replay continua sem default funcional em `ANALYSIS_REPLAY_TTL_DAYS`.
+TechTrail, IMEI e Replay possuem defaults iniciais independentes de 30 dias em `TECHTRAIL_CACHE_TTL_DAYS`, `IMEI_CACHE_TTL_DAYS` e `ANALYSIS_REPLAY_TTL_DAYS`. Cada família aceita override próprio.
 
 Shadow writes aceitos:
 
 - TechTrail: somente resposta `ok` com summary; identidade da pessoa pelo token HMAC do CPF.
 - IMEI: fatos válidos equivalentes a `IMEI_OK`/`IMEI_INVALID` são persistidos; mismatch e marca esperada são contexto da proposta e são reaplicados na leitura. `IMEI_FAIL`, timeout e erros técnicos não são persistidos no V2.
-- Replay: resposta concluída do engine ou cache V1, somente quando o TTL foi configurado. O replay é gravado, mas nunca consultado para responder nesta fase.
+- Replay: resposta concluída do engine ou cache V1, persistida com a política interna efetiva. A leitura ocorre somente quando `ANALYSIS_REPLAY_ENABLED=true`.
 
 A telemetria shadow usa um sink interno separado. Ela não é adicionada aos `events` públicos do response, preservando o contrato HTTP e o golden master.
 
 ### Replay input deliberado
 
-O hash canônico inclui: CPF, nome, email, telefone, CEP, valor, parceiro, canal, proposta, modelo declarado, IMEI e os campos de device atualmente devolvidos ou observados pelo motor (`ip`, `visitorId`, OS, GPU, cores, mobilidade, versão do OS, browser, dimensões de tela e provider do fingerprint).
+O hash canônico inclui: CPF, nome, email, telefone, CEP, valor, parceiro, canal, proposta, modelo declarado, IMEI e os campos de device atualmente devolvidos no snapshot público (`ip`, `visitorId`, OS, GPU, cores, mobilidade, versão do OS, browser, dimensões de tela e provider do fingerprint). Esses campos de device ainda não pontuam, mas entram porque alteram o response atual; omiti-los permitiria devolver um snapshot antigo para um payload diferente.
 
-Ficam excluídos: `sessionId`, `collectedAt`, request IDs técnicos do fingerprint, timestamps de transporte, propriedades extras do device e a ordem das propriedades JSON. Esses campos não alteram hoje a decisão nem o snapshot público relevante. `ruleVersion` não entra no input hash porque participa separadamente da identidade e compatibilidade do replay.
+Ficam excluídos: `sessionId`, `collectedAt`, request IDs técnicos do fingerprint, timestamps de transporte, propriedades extras do device e a ordem das propriedades JSON. Esses campos não alteram hoje a decisão nem o snapshot público relevante. `analysisPolicyVersion` e `cacheSchemaVersion` não entram no input hash porque participam separadamente da identidade e compatibilidade do Replay.
 
 ### Raw e segurança
 
@@ -71,7 +71,7 @@ Os caches V2 armazenam somente a evidência normalizada necessária para reutili
 
 CPF e IMEI nunca são chaves cruas nas tabelas V2: são tokenizados por HMAC-SHA-256 com `EVIDENCE_LOOKUP_HMAC_KEY`. O segredo deve ser separado das credenciais dos providers, nunca logado e rotacionado por procedimento compatível com invalidação/reindexação. As tabelas têm RLS habilitado e não concedem acesso direto a `anon` ou `authenticated`. Retenção e descarte ainda precisam de política formal.
 
-### Flags preparadas
+### Flags
 
 Os defaults preservam integralmente o V1:
 
@@ -81,7 +81,49 @@ Os defaults preservam integralmente o V1:
 - `CACHE_V2_READ_IMEI_ENABLED=false`;
 - `DECISION_CACHE_V1_READ_ENABLED=true`.
 
-`ANALYSIS_REPLAY_ENABLED` continua sem leitura no fluxo. Shadow write é controlado exclusivamente por `CACHE_V2_WRITE_ENABLED`.
+`ANALYSIS_REPLAY_ENABLED` controla somente a leitura antecipada. Shadow write continua controlado exclusivamente por `CACHE_V2_WRITE_ENABLED`.
+
+## Analysis Replay READ — AVAILABLE BEHIND FLAG
+
+Replay significa **a mesma análise**, não uma decisão por CPF. `ANALYSIS_REPLAY_ENABLED=false` é o default. Quando a flag está ligada, a consulta ocorre depois da normalização/validação mínima da entrada e antes do `decision_cache` V1, dos caches de evidência, dos providers e do engine.
+
+```text
+Request
+  → buildInputSummary/buildReplayInput
+  → Analysis Replay
+      ├─ HIT → statusCode e body originais; zero providers/engine
+      └─ fallback → Decision Cache V1 quando aplicável
+                    → TechTrail Cache/Provider
+                    → Engine
+                    → IMEI Cache/Provider quando aplicável
+                    → Decision
+                    → Replay shadow write
+```
+
+A identidade lógica é:
+
+```text
+proposalId opcional
++ HMAC-SHA-256 do buildReplayInput canônico
++ analysisPolicyVersion
++ cacheSchemaVersion
+```
+
+`proposalId` não é suficiente sozinho e também participa do input hash. Mesmo `proposalId` com qualquer input relevante diferente produz outra identidade e executa uma nova análise. CPF isolado, `proposalId` isolado e `ruleVersion` HTTP isolado nunca autorizam reutilização.
+
+O identificador interno de comportamento possui atualmente dois valores:
+
+- `score-v1|imei-legacy-v1`;
+- `score-v1|imei-blacklist-v1`.
+
+Ele é persistido fisicamente na coluna histórica `analysis_replay.rule_version`, evitando migration, mas sua semântica é exclusivamente `analysisPolicyVersion`. O `ruleVersion` público continua sendo o produzido por cada fluxo existente e não governa compatibilidade do Replay. Essa separação impede reutilização nos dois sentidos entre IMEI legado e IMEI Blacklist V1.
+
+- `HIT` defensivamente válido e não expirado: devolve exatamente `statusCode` e `body` armazenados; não consulta V1, evidence caches ou providers; não executa engine, auditoria de nova decisão ou shadow rewrite.
+- `MISS`, `EXPIRED`, `INCOMPATIBLE` e `BACKEND_ERROR`: executam o fluxo atual normalmente. Erros de hash, configuração, HMAC ou adapter também fazem bypass best-effort.
+- HIT não altera `createdAt`/`expiresAt` e não implementa sliding expiration.
+- `ANALYSIS_REPLAY_TTL_DAYS` possui default independente de 30 dias e aceita override positivo por ENV.
+
+A telemetria de Replay é interna (`hit`, `miss`, `expired`, `incompatible`, `backend_error` e `bypass`) e não altera o body armazenado nem o contrato HTTP público.
 
 ## TechTrail Cache V2 READ — AVAILABLE BEHIND FLAG
 
@@ -107,7 +149,7 @@ A evidência factual não persiste `brandExpected` nem um `IMEI_BRAND_MISMATCH` 
 
 Um HIT não cria `imei_raw`, não renova `fetchedAt`/`expiresAt` e não dispara shadow rewrite. Proveniência (source, artifact/reference, fetched/expiry, age, provider e service) fica somente na auditoria interna; o contrato HTTP público não muda. `IMEI_CACHE_TTL_DAYS` tem default independente de 30 dias e aceita override por ENV.
 
-Analysis Replay read continua inexistente.
+Analysis Replay, quando habilitado, acontece antes desta leitura de evidência.
 
 ## IMEI Blacklist V1 — AVAILABLE BEHIND FLAG
 
@@ -159,4 +201,4 @@ As versões e o namespace de serviço impedem que evidências Apple/Samsung/Xiao
 
 Enquanto a política Blacklist está ligada, o `decision_cache` V1 por CPF é ignorado para leitura e escrita. Isso evita tanto pular uma consulta Blacklist por um APPROVE antigo quanto contaminar o rollback legado com uma decisão nova. A auditoria usa `score-v1+imei-blacklist-v1`; o caminho legado mantém `score-v1`.
 
-Telemetria Blacklist é interna/audit-only e não é acrescentada aos events HTTP públicos. Analysis Replay read continua inativo.
+Telemetria Blacklist é interna/audit-only e não é acrescentada aos events HTTP públicos. Analysis Replay, quando habilitado, acontece antes do caminho Blacklist e separa sua identidade pela `analysisPolicyVersion`.

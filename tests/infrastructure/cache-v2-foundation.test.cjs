@@ -41,17 +41,17 @@ test("configuração V2 preserva flags inativas e TTLs independentes de 30 dias"
       decisionCacheV1ReadEnabled: true,
       techTrailTtlDays: 30,
       imeiTtlDays: 30,
-      replayTtlDays: null,
+      replayTtlDays: 30,
     });
   });
 });
 
-test("TTLs configuráveis preservam default IMEI independente e replay ausente", () => {
+test("TTLs configuráveis preservam defaults independentes de IMEI e Replay", () => {
   withIsolatedEnvironment({ TECHTRAIL_CACHE_TTL_DAYS: "12" }, () => {
     const config = foundation.config.resolveCacheV2Config();
     assert.equal(config.techTrailTtlDays, 12);
     assert.equal(config.imeiTtlDays, 30);
-    assert.equal(config.replayTtlDays, null);
+    assert.equal(config.replayTtlDays, 30);
     assert.equal(
       foundation.config.evidenceExpiresAt("2026-08-01T00:00:00.000Z", config.techTrailTtlDays),
       "2026-08-13T00:00:00.000Z"
@@ -195,16 +195,46 @@ test("adapter grava payload normalizado IMEI com serviço e versões", async () 
   assert.equal(fake.calls[0].row.raw_reference, "raw-imei-1");
 });
 
-test("adapter grava replay com proposal, input hash e ruleVersion", async () => {
+test("adapter grava replay com proposal, input hash e analysisPolicyVersion", async () => {
   const fake = fakeSupabase();
   const repository = foundation.adapters.createSupabaseCacheV2Adapters(fake.client).analysisReplayRepository;
   await repository.put({
-    proposalId: "proposal-1", inputHash: "input-hash", ruleVersion: "score-v1",
+    proposalId: "proposal-1", inputHash: "input-hash",
+    analysisPolicyVersion: "score-v1|imei-legacy-v1",
     cacheSchemaVersion: "cache-v1", result: { statusCode: 200, body: { decision: "APPROVE" } },
     createdAt: "2026-08-01T00:00:00.000Z", expiresAt: "2026-08-02T00:00:00.000Z",
   });
   assert.equal(fake.calls[0].row.proposal_id, "proposal-1");
   assert.equal(fake.calls[0].row.input_hash, "input-hash");
-  assert.equal(fake.calls[0].row.rule_version, "score-v1");
+  assert.equal(fake.calls[0].row.rule_version, "score-v1|imei-legacy-v1");
   assert.deepEqual(fake.calls[0].row.result_json.body, { decision: "APPROVE" });
+});
+
+test("adapter lê Replay pela identidade completa de proposta, hash, política e schema", async () => {
+  const row = {
+    proposal_id: "proposal-1",
+    input_hash: "input-hash",
+    rule_version: "score-v1|imei-blacklist-v1",
+    cache_schema_version: "cache-v2-schema-v1",
+    result_json: { statusCode: 202, body: { cached: true } },
+    created_at: new Date(Date.now() - 1000).toISOString(),
+    expires_at: new Date(Date.now() + 60000).toISOString(),
+  };
+  const fake = fakeSupabase({ analysis_replay: { data: row, error: null } });
+  const repository = foundation.adapters.createSupabaseCacheV2Adapters(fake.client).analysisReplayRepository;
+  const result = await repository.get({
+    proposalId: "proposal-1",
+    inputHash: "input-hash",
+    analysisPolicyVersion: "score-v1|imei-blacklist-v1",
+    cacheSchemaVersion: "cache-v2-schema-v1",
+  });
+  assert.equal(result.state, "HIT");
+  assert.deepEqual(result.value.result, row.result_json);
+  assert.equal(result.value.analysisPolicyVersion, "score-v1|imei-blacklist-v1");
+  assert.deepEqual(fake.calls[0].filters, [
+    ["proposal_id", "proposal-1"],
+    ["input_hash", "input-hash"],
+    ["rule_version", "score-v1|imei-blacklist-v1"],
+    ["cache_schema_version", "cache-v2-schema-v1"],
+  ]);
 });

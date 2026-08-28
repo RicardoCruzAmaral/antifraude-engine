@@ -13,6 +13,7 @@ import type {
 } from "../../domain/contracts";
 import { buildReplayInput } from "./replayInput";
 import { isConsistentImeiBlacklistFactualStatus } from "../../domain/engine";
+import type { AnalysisPolicyVersion } from "./analysisReplayReader";
 
 export type CacheV2ShadowVersions = {
   cacheSchemaVersion: string;
@@ -190,7 +191,7 @@ export async function shadowWriteReplay(
   input: {
     traceId: string;
     inputSummary: InputSummary;
-    ruleVersion: string;
+    analysisPolicyVersion: AnalysisPolicyVersion;
     statusCode: number;
     responseBody: unknown;
     createdAt: string;
@@ -208,7 +209,7 @@ export async function shadowWriteReplay(
     await dependencies.analysisReplayRepository.put({
       proposalId: input.inputSummary.proposalId,
       inputHash: dependencies.lookupTokenService.hashRelevantInput(buildReplayInput(input.inputSummary)),
-      ruleVersion: input.ruleVersion,
+      analysisPolicyVersion: input.analysisPolicyVersion,
       cacheSchemaVersion: dependencies.versions.cacheSchemaVersion,
       result: { statusCode: input.statusCode, body: input.responseBody },
       createdAt: input.createdAt,

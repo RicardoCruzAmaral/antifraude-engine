@@ -19,6 +19,7 @@ import type { CacheV2ShadowDependencies } from "../src/application/cacheV2/shado
 import type { TechTrailReadDependencies } from "../src/application/cacheV2/techTrailReader";
 import type { ImeiReadDependencies } from "../src/application/cacheV2/imeiReader";
 import type { ImeiBlacklistReadDependencies } from "../src/application/cacheV2/imeiBlacklistReader";
+import type { AnalysisReplayReadDependencies } from "../src/application/cacheV2/analysisReplayReader";
 import { resolveImeiLookupContext } from "../src/providers/imei";
 
 function envInt(name: string, fallback: number) {
@@ -58,6 +59,7 @@ type CacheV2Composition = {
   techTrailRead?: TechTrailReadDependencies;
   imeiRead?: ImeiReadDependencies;
   imeiBlacklistRead?: ImeiBlacklistReadDependencies;
+  replayRead?: AnalysisReplayReadDependencies;
   decisionCacheV1ReadEnabled: boolean;
 };
 
@@ -78,7 +80,7 @@ function composeCacheV2(
     });
     return { decisionCacheV1ReadEnabled: true };
   }
-  if (!config.writeEnabled && !config.readTechTrailEnabled && !config.readImeiEnabled) {
+  if (!config.analysisReplayEnabled && !config.writeEnabled && !config.readTechTrailEnabled && !config.readImeiEnabled) {
     return { decisionCacheV1ReadEnabled: config.decisionCacheV1ReadEnabled };
   }
 
@@ -126,6 +128,12 @@ function composeCacheV2(
     replayTtlDays: config.replayTtlDays,
     versions,
   } : undefined;
+  const replayRead: AnalysisReplayReadDependencies | undefined = config.analysisReplayEnabled ? {
+    analysisReplayRepository: adapters?.analysisReplayRepository ?? null,
+    lookupTokenService,
+    telemetry: consoleCacheV2ShadowTelemetry,
+    cacheSchemaVersion: versions.cacheSchemaVersion,
+  } : undefined;
   const techTrailRead: TechTrailReadDependencies | undefined = config.readTechTrailEnabled ? {
     enrichmentEvidenceCache: adapters?.enrichmentEvidenceCache ?? null,
     lookupTokenService,
@@ -160,6 +168,7 @@ function composeCacheV2(
     techTrailRead,
     imeiRead,
     imeiBlacklistRead,
+    replayRead,
     decisionCacheV1ReadEnabled: config.decisionCacheV1ReadEnabled,
   };
 }
@@ -193,6 +202,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       cacheV2TechTrailRead: cacheV2.techTrailRead,
       cacheV2ImeiRead: cacheV2.imeiRead,
       cacheV2ImeiBlacklistRead: cacheV2.imeiBlacklistRead,
+      cacheV2ReplayRead: cacheV2.replayRead,
       imeiBlacklistTelemetry: consoleCacheV2ShadowTelemetry,
     });
     const result = await useCase.execute({
