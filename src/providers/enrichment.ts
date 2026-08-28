@@ -1,5 +1,7 @@
 // src/providers/enrichment.ts
-export type EnrichmentMode = "off" | "mock" | "real";
+import { resolveEnrichmentMode, type EnrichmentMode } from "../infrastructure/config/envParsers";
+
+export type { EnrichmentMode } from "../infrastructure/config/envParsers";
 
 export type EnrichmentCallInput = {
   traceId: string;
@@ -167,7 +169,7 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: numbe
 
 export async function enrich(input: EnrichmentCallInput): Promise<EnrichmentResult> {
   const started = Date.now();
-  const mode = (process.env.ENRICHMENT_MODE ?? "mock") as EnrichmentMode;
+  const mode = resolveEnrichmentMode();
 
   const requestParams = buildRequestParams(input);
 

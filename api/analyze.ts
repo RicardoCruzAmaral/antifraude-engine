@@ -21,6 +21,13 @@ import type { ImeiReadDependencies } from "../src/application/cacheV2/imeiReader
 import type { ImeiBlacklistReadDependencies } from "../src/application/cacheV2/imeiBlacklistReader";
 import type { AnalysisReplayReadDependencies } from "../src/application/cacheV2/analysisReplayReader";
 import { resolveImeiLookupContext } from "../src/providers/imei";
+import {
+  InvalidBooleanEnvironmentError,
+  parseBooleanEnv,
+  resolveEnrichmentMode,
+  type EnrichmentMode,
+} from "../src/infrastructure/config/envParsers";
+import { resolveDecisionScoreConfig } from "../src/domain/engine";
 
 function envInt(name: string, fallback: number) {
   const value = Number(process.env[name]);
@@ -32,17 +39,11 @@ function envStr(name: string, fallback: string) {
   return value && value.trim() ? value.trim() : fallback;
 }
 
-function envBool(name: string, fallback: boolean) {
-  const value = process.env[name];
-  if (value === undefined || value.trim() === "") return fallback;
-  return value.trim().toLowerCase() === "true";
-}
-
 function resolveConfig(): AnalyzeAntifraudConfig {
   return {
     supabaseMissingPolicy: envStr("SUPABASE_MISSING_POLICY", "continue"),
     enrichmentTimeoutMs: envInt("ENRICHMENT_TIMEOUT_MS", 4000),
-    enrichmentMode: envStr("ENRICHMENT_MODE", "mock"),
+    enrichmentMode: resolveEnrichmentMode(),
     enrichmentFailDecision:
       envStr("ENRICHMENT_FAIL_DECISION", "DECLINE") === "APPROVE" ? "APPROVE" : "DECLINE",
     imeiTimeoutMs: envInt("IMEI_TIMEOUT_MS", 20000),
@@ -50,7 +51,8 @@ function resolveConfig(): AnalyzeAntifraudConfig {
     cacheTtlDaysApprove: envInt("CACHE_TTL_DAYS_APPROVE", envInt("CACHE_TTL_DAYS_APROVE", 30)),
     cacheTtlDaysDecline: envInt("CACHE_TTL_DAYS_DECLINE", 30),
     cacheTtlSecondsTechFail: envInt("CACHE_TTL_SECONDS_ON_TECH_FAIL", 300),
-    imeiBlacklistV1Enabled: envBool("IMEI_BLACKLIST_V1_ENABLED", false),
+    imeiBlacklistV1Enabled: parseBooleanEnv("IMEI_BLACKLIST_V1_ENABLED", false),
+    decisionScoreConfig: resolveDecisionScoreConfig(),
   };
 }
 
@@ -66,7 +68,8 @@ type CacheV2Composition = {
 function composeCacheV2(
   traceId: string,
   blacklistEnabled: boolean,
-  blacklistService: string | null
+  blacklistService: string | null,
+  enrichmentMode: EnrichmentMode
 ): CacheV2Composition {
   let config;
   try {
@@ -78,6 +81,7 @@ function composeCacheV2(
       traceId,
       reason: "INVALID_CONFIGURATION",
     });
+    if (error instanceof InvalidBooleanEnvironmentError) throw error;
     return { decisionCacheV1ReadEnabled: true };
   }
   if (!config.analysisReplayEnabled && !config.writeEnabled && !config.readTechTrailEnabled && !config.readImeiEnabled) {
@@ -138,7 +142,7 @@ function composeCacheV2(
     enrichmentEvidenceCache: adapters?.enrichmentEvidenceCache ?? null,
     lookupTokenService,
     telemetry: consoleCacheV2ShadowTelemetry,
-    provider: envStr("ENRICHMENT_MODE", "mock") === "real" ? "techtrail" : "mock",
+    provider: enrichmentMode === "real" ? "techtrail" : "mock",
     providerContractVersion: versions.techTrailProviderContractVersion,
     normalizerVersion: versions.techTrailNormalizerVersion,
     cacheSchemaVersion: versions.cacheSchemaVersion,
@@ -189,7 +193,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const cacheV2 = composeCacheV2(
       traceId,
       analyzeConfig.imeiBlacklistV1Enabled === true,
-      blacklistProvider.service
+      blacklistProvider.service,
+      analyzeConfig.enrichmentMode
     );
     const useCase = new AnalyzeAntifraudUseCase({
       enrichmentProvider: techTrailEnrichmentProvider,

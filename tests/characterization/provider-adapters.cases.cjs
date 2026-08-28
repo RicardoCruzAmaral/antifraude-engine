@@ -625,3 +625,29 @@ test("IMEI preserva resposta 200 sem JSON como IMEI_OK", async () => {
   assert.equal(result.summary, null);
   assert.equal(result.raw, null);
 });
+
+test("TechTrail mode normalizes case/space and typos never trigger a real fetch", async () => {
+  let fetchCalls = 0;
+  const fetchStub = async () => {
+    fetchCalls += 1;
+    throw new Error("UNEXPECTED_FETCH");
+  };
+  const input = normalizedEnrichmentInput();
+
+  const mockResult = await withIsolatedEnvironmentAsync(
+    { ENRICHMENT_MODE: " MOCK ", ENRICHMENT_MOCK_MS: "0" },
+    () => withFetchStub(fetchStub, () => techTrailEnrichmentProvider.enrich(input))
+  );
+  assert.equal(mockResult.mode, "mock");
+
+  for (const invalid of ["rea", "reall", "prod", "true"]) {
+    await assert.rejects(
+      withIsolatedEnvironmentAsync(
+        { ENRICHMENT_MODE: invalid },
+        () => withFetchStub(fetchStub, () => techTrailEnrichmentProvider.enrich(input))
+      ),
+      /ENRICHMENT_MODE/
+    );
+  }
+  assert.equal(fetchCalls, 0);
+});

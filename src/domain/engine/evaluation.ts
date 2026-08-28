@@ -10,6 +10,7 @@ import type {
 import { detectHardBlock } from "./hardBlocks";
 import { classifyProfileByScore } from "./profiles";
 import { computeScoreLocal } from "./scoring";
+import { resolveDecisionScoreConfig, type DecisionScoreConfig } from "./scoreConfig";
 
 export function computeTelemetryFlags(
   enrichResult: EnrichmentResultForDecision,
@@ -40,7 +41,8 @@ export function computeTelemetryFlags(
 
 export function preEvaluate(
   enrichResult: EnrichmentResultForDecision,
-  input: InputSummary
+  input: InputSummary,
+  scoreConfig: DecisionScoreConfig = resolveDecisionScoreConfig()
 ): PreEvaluationResult {
   const hardBlock = detectHardBlock(enrichResult);
 
@@ -54,7 +56,7 @@ export function preEvaluate(
   }
 
   console.log("🟦 about to call computeScoreLocal");
-  const scoreResult = computeScoreLocal(enrichResult, input);
+  const scoreResult = computeScoreLocal(enrichResult, input, scoreConfig);
   console.log("🟩 returned from computeScoreLocal", scoreResult);
 
   const baseScore = Number.isFinite(scoreResult?.score)

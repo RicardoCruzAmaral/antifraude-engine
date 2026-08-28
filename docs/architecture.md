@@ -83,6 +83,23 @@ Os defaults preservam integralmente o V1:
 
 `ANALYSIS_REPLAY_ENABLED` controla somente a leitura antecipada. Shadow write continua controlado exclusivamente por `CACHE_V2_WRITE_ENABLED`.
 
+As flags `ANALYSIS_REPLAY_ENABLED`, `CACHE_V2_WRITE_ENABLED`,
+`CACHE_V2_READ_TECHTRAIL_ENABLED`, `CACHE_V2_READ_IMEI_ENABLED`,
+`DECISION_CACHE_V1_READ_ENABLED` e `IMEI_BLACKLIST_V1_ENABLED` aceitam somente
+`true` ou `false`, sem distinção de caixa e com espaços externos ignorados.
+Ausência ou valor vazio preserva o default documentado. Um valor inválido nunca
+é convertido silenciosamente: a configuração da request falha antes da
+composição dos providers e emite telemetria de erro quando a flag pertence ao
+Cache V2.
+
+`ENRICHMENT_MODE` aceita exclusivamente `off`, `mock` ou `real`, também sem
+distinção de caixa e com espaços externos ignorados. Ausência ou vazio mantém o
+default legado `mock`; valor explícito inválido falha antes da composição dos
+providers. O modo normalizado é compartilhado pela configuração da análise e
+pelo namespace do TechTrail Cache, impedindo provider real em namespace mock
+ou o inverso. O próprio provider aplica o mesmo parser, de modo que typos como
+`rea`, `reall`, `prod` ou `true` nunca iniciam uma chamada HTTP real.
+
 ## Analysis Replay READ — AVAILABLE BEHIND FLAG
 
 Replay significa **a mesma análise**, não uma decisão por CPF. `ANALYSIS_REPLAY_ENABLED=false` é o default. Quando a flag está ligada, a consulta ocorre depois da normalização/validação mínima da entrada e antes do `decision_cache` V1, dos caches de evidência, dos providers e do engine.
@@ -111,12 +128,43 @@ proposalId opcional
 
 `proposalId` não é suficiente sozinho e também participa do input hash. Mesmo `proposalId` com qualquer input relevante diferente produz outra identidade e executa uma nova análise. CPF isolado, `proposalId` isolado e `ruleVersion` HTTP isolado nunca autorizam reutilização.
 
-O identificador interno de comportamento possui atualmente dois valores:
+### Policy Compatibility
 
-- `score-v1|imei-legacy-v1`;
-- `score-v1|imei-blacklist-v1`.
+O identificador interno de comportamento tem o formato:
 
-Ele é persistido fisicamente na coluna histórica `analysis_replay.rule_version`, evitando migration, mas sua semântica é exclusivamente `analysisPolicyVersion`. O `ruleVersion` público continua sendo o produzido por cada fluxo existente e não governa compatibilidade do Replay. Essa separação impede reutilização nos dois sentidos entre IMEI legado e IMEI Blacklist V1.
+```text
+analysisPolicyVersion = score-v1 | política IMEI | cfg:<SHA-256>
+```
+
+Exemplos de prefixo são `score-v1|imei-legacy-v1|cfg:` e
+`score-v1|imei-blacklist-v1|cfg:`. O hash é o
+`decisionConfigFingerprint`: uma serialização canônica dos valores
+efetivamente resolvidos para pesos de score, penalidade IMEI, modo e falha do
+enrichment e timeouts dos providers. Os limites de profile atuais (`10/25/45`)
+não são configuráveis; seu comportamento pertence ao `score-v1`. Uma alteração
+futura desses limites exige bump da versão base ou sua inclusão explícita na
+configuração resolvida.
+
+Uma mudança em qualquer peso produz outro fingerprint e torna o Replay
+anterior incompatível automaticamente, mesmo quando a versão nominal da regra
+e a política IMEI continuam iguais. Secrets, API keys, URLs, HMAC, timestamps,
+trace IDs, TTLs e flags de cache não participam do fingerprint.
+
+O valor completo é persistido fisicamente na coluna histórica
+`analysis_replay.rule_version`, evitando migration, mas sua semântica é
+exclusivamente `analysisPolicyVersion`. A telemetria interna de Replay também
+registra essa versão. Persistir o fingerprint em uma coluna separada exigiria
+migration e permanece fora desta etapa.
+
+O `ruleVersion` público continua sendo a versão auditável produzida por cada
+fluxo existente e não governa compatibilidade do Replay. Portanto:
+
+- `ruleVersion`: versão pública/auditável da regra;
+- `analysisPolicyVersion`: identidade interna completa de compatibilidade;
+- `decisionConfigFingerprint`: configuração concreta usada na execução.
+
+Essa separação impede reutilização entre IMEI legado e IMEI Blacklist V1 e
+entre configurações decisórias diferentes.
 
 - `HIT` defensivamente válido e não expirado: devolve exatamente `statusCode` e `body` armazenados; não consulta V1, evidence caches ou providers; não executa engine, auditoria de nova decisão ou shadow rewrite.
 - `MISS`, `EXPIRED`, `INCOMPATIBLE` e `BACKEND_ERROR`: executam o fluxo atual normalmente. Erros de hash, configuração, HMAC ou adapter também fazem bypass best-effort.

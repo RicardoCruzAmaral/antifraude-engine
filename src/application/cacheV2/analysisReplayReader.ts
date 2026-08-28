@@ -10,8 +10,7 @@ import type { InputSummary } from "../../domain/contracts";
 import { buildReplayInput } from "./replayInput";
 
 export type AnalysisPolicyVersion =
-  | "score-v1|imei-legacy-v1"
-  | "score-v1|imei-blacklist-v1";
+  `score-v1|imei-${"legacy" | "blacklist"}-v1|cfg:${string}`;
 
 export type AnalysisReplayReadDependencies = {
   analysisReplayRepository: AnalysisReplayRepository | null;
@@ -25,11 +24,11 @@ export type AnalysisReplayReadResult =
   | { state: "FALLBACK"; cacheState: string };
 
 export function resolveAnalysisPolicyVersion(
-  imeiBlacklistV1Enabled: boolean
+  imeiBlacklistV1Enabled: boolean,
+  decisionConfigFingerprint: string
 ): AnalysisPolicyVersion {
-  return imeiBlacklistV1Enabled
-    ? "score-v1|imei-blacklist-v1"
-    : "score-v1|imei-legacy-v1";
+  const imeiPolicy = imeiBlacklistV1Enabled ? "imei-blacklist-v1" : "imei-legacy-v1";
+  return `score-v1|${imeiPolicy}|cfg:${decisionConfigFingerprint}`;
 }
 
 function record(
@@ -82,6 +81,7 @@ export async function readAnalysisReplay(
       name: "cache_v2_replay_read_bypass",
       traceId: input.traceId,
       reason: "DEPENDENCY_UNAVAILABLE",
+      details: { analysisPolicyVersion: input.analysisPolicyVersion },
     });
     return { state: "FALLBACK", cacheState: "BYPASS" };
   }
@@ -133,6 +133,7 @@ export async function readAnalysisReplay(
         : lookup.state === "BACKEND_ERROR"
           ? lookup.errorCode
           : lookup.state,
+      details: { analysisPolicyVersion: input.analysisPolicyVersion },
     });
     return { state: "FALLBACK", cacheState: lookup.state };
   } catch (error) {
@@ -141,6 +142,7 @@ export async function readAnalysisReplay(
       name: "cache_v2_replay_read_backend_error",
       traceId: input.traceId,
       reason: "LOOKUP_FAILED",
+      details: { analysisPolicyVersion: input.analysisPolicyVersion },
     });
     return { state: "FALLBACK", cacheState: "BACKEND_ERROR" };
   }

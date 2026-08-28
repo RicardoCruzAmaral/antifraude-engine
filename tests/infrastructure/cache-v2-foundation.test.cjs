@@ -238,3 +238,122 @@ test("adapter lê Replay pela identidade completa de proposta, hash, política e
     ["cache_schema_version", "cache-v2-schema-v1"],
   ]);
 });
+
+function defaultDecisionSnapshot() {
+  return {
+    scoring: foundation.scoreConfig.resolveDecisionScoreConfig(),
+    imeiProblemScore: 5,
+    enrichmentMode: "mock",
+    enrichmentFailDecision: "DECLINE",
+    enrichmentTimeoutMs: 4000,
+    imeiTimeoutMs: 20000,
+  };
+}
+
+test("decisionConfigFingerprint is deterministic, canonical and order independent", () => {
+  withIsolatedEnvironment({}, () => {
+    const snapshot = defaultDecisionSnapshot();
+    const reordered = {
+      imeiTimeoutMs: snapshot.imeiTimeoutMs,
+      enrichmentTimeoutMs: snapshot.enrichmentTimeoutMs,
+      enrichmentFailDecision: snapshot.enrichmentFailDecision,
+      enrichmentMode: snapshot.enrichmentMode,
+      imeiProblemScore: snapshot.imeiProblemScore,
+      scoring: Object.fromEntries(Object.entries(snapshot.scoring).reverse()),
+    };
+    const first = foundation.decisionPolicy.decisionConfigFingerprint(snapshot);
+    assert.equal(first, foundation.decisionPolicy.decisionConfigFingerprint(snapshot));
+    assert.equal(first, foundation.decisionPolicy.decisionConfigFingerprint(reordered));
+    assert.match(first, /^[a-f0-9]{64}$/);
+  });
+});
+
+test("every resolved decision weight participates in the fingerprint", () => {
+  const mappings = [
+    ["SCORE_EMAIL_DIVERGENTE", "scoreEmailDivergente"],
+    ["SCORE_TELEFONE_DIVERGENTE", "scoreTelefoneDivergente"],
+    ["SCORE_CEP_DIVERGENTE", "scoreCepDivergente"],
+    ["SCORE_RISCO_ALTISSIMO", "scoreRiscoAltissimo"],
+    ["SCORE_RISCO_ALTO", "scoreRiscoAlto"],
+    ["SCORE_RISCO_MEDIO", "scoreRiscoMedio"],
+    ["SCORE_RISCO_BAIXO", "scoreRiscoBaixo"],
+    ["SCORE_RISCO_BAIXISSIMO", "scoreRiscoBaixissimo"],
+    ["SCORE_PROB_ALTISSIMA", "scoreProbAltissima"],
+    ["SCORE_PROB_ALTA", "scoreProbAlta"],
+    ["SCORE_PROB_MEDIA", "scoreProbMedia"],
+    ["SCORE_PROB_BAIXA", "scoreProbBaixa"],
+    ["SCORE_PROB_BAIXISSIMA", "scoreProbBaixissima"],
+    ["SCORE_PROC_4_5", "scoreProcessos4A5"],
+    ["SCORE_PROC_GT_5", "scoreProcessosMaiorQue5"],
+    ["VALOR_CELULAR_HIGH_VALUE_MIN", "valorCelularHighValueMin"],
+    ["SCORE_VALOR_CELULAR_HIGH_VALUE", "scoreValorCelularHighValue"],
+  ];
+
+  withIsolatedEnvironment({}, () => {
+    const baseline = defaultDecisionSnapshot();
+    const baselineFingerprint = foundation.decisionPolicy.decisionConfigFingerprint(baseline);
+    for (const [envName, property] of mappings) {
+      process.env[envName] = String(baseline.scoring[property] + 1);
+      const changed = defaultDecisionSnapshot();
+      assert.equal(changed.scoring[property], baseline.scoring[property] + 1, envName);
+      assert.notEqual(
+        foundation.decisionPolicy.decisionConfigFingerprint(changed),
+        baselineFingerprint,
+        envName
+      );
+      delete process.env[envName];
+    }
+
+    const imeiChanged = { ...baseline, imeiProblemScore: baseline.imeiProblemScore + 1 };
+    assert.notEqual(
+      foundation.decisionPolicy.decisionConfigFingerprint(imeiChanged),
+      baselineFingerprint,
+      "SCORE_IMEI_PROBLEM"
+    );
+  });
+});
+
+test("secrets, TTLs and cache flags do not participate in the fingerprint", () => {
+  withIsolatedEnvironment({}, () => {
+    const before = foundation.decisionPolicy.decisionConfigFingerprint(defaultDecisionSnapshot());
+    process.env.ENRICHMENT_AUTH = "synthetic-secret-one";
+    process.env.IMEI_INFO_API_KEY = "synthetic-secret-two";
+    process.env.EVIDENCE_LOOKUP_HMAC_KEY = "synthetic-secret-three";
+    process.env.ENRICHMENT_URL_BASE = "https://different.example.invalid";
+    process.env.TECHTRAIL_CACHE_TTL_DAYS = "1";
+    process.env.IMEI_CACHE_TTL_DAYS = "2";
+    process.env.ANALYSIS_REPLAY_TTL_DAYS = "3";
+    process.env.CACHE_V2_WRITE_ENABLED = "true";
+    process.env.CACHE_V2_READ_TECHTRAIL_ENABLED = "true";
+    process.env.CACHE_V2_READ_IMEI_ENABLED = "true";
+    process.env.ANALYSIS_REPLAY_ENABLED = "true";
+    const after = foundation.decisionPolicy.decisionConfigFingerprint(defaultDecisionSnapshot());
+    assert.equal(after, before);
+  });
+});
+
+test("ENRICHMENT_MODE normalizes its enum, defaults to mock and rejects typos", () => {
+  assert.equal(foundation.envParsers.resolveEnrichmentMode(undefined), "mock");
+  assert.equal(foundation.envParsers.resolveEnrichmentMode("  "), "mock");
+  assert.equal(foundation.envParsers.resolveEnrichmentMode(" OFF "), "off");
+  assert.equal(foundation.envParsers.resolveEnrichmentMode("Mock"), "mock");
+  assert.equal(foundation.envParsers.resolveEnrichmentMode(" REAL "), "real");
+  for (const invalid of ["rea", "reall", "prod", "true"]) {
+    assert.throws(() => foundation.envParsers.resolveEnrichmentMode(invalid), /ENRICHMENT_MODE/);
+  }
+});
+
+test("boolean flags accept only true/false, normalize case/space and preserve defaults", () => {
+  withIsolatedEnvironment({}, () => {
+    assert.equal(foundation.envParsers.parseBooleanEnv("ANALYSIS_REPLAY_ENABLED", false), false);
+    process.env.ANALYSIS_REPLAY_ENABLED = " TRUE ";
+    assert.equal(foundation.envParsers.parseBooleanEnv("ANALYSIS_REPLAY_ENABLED", false), true);
+    process.env.ANALYSIS_REPLAY_ENABLED = "False";
+    assert.equal(foundation.envParsers.parseBooleanEnv("ANALYSIS_REPLAY_ENABLED", true), false);
+    process.env.ANALYSIS_REPLAY_ENABLED = "tru";
+    assert.throws(
+      () => foundation.envParsers.parseBooleanEnv("ANALYSIS_REPLAY_ENABLED", false),
+      /must be either true or false/
+    );
+  });
+});

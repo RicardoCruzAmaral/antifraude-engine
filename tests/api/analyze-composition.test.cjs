@@ -238,3 +238,63 @@ test("shadow habilitado sem HMAC não derruba composição V1", async () => {
     assert.equal(loaded.calls.useCaseConstruct[0].cacheV2Shadow.lookupTokenService, null);
   });
 });
+
+test("validated ENRICHMENT_MODE keeps provider and TechTrail namespace coherent", async () => {
+  await withIsolatedEnvironmentAsync({
+    ENRICHMENT_MODE: " REAL ",
+    CACHE_V2_READ_TECHTRAIL_ENABLED: "true",
+    EVIDENCE_LOOKUP_HMAC_KEY: "synthetic-composition-key",
+    SUPABASE_URL: "https://composition.invalid",
+    SUPABASE_SERVICE_ROLE_KEY: "synthetic-test-key",
+  }, async () => {
+    const loaded = loadAnalyzeForCharacterization({
+      mockUseCase: true,
+      useCaseResult: { statusCode: 200, body: { ok: true } },
+    });
+    const res = response();
+    await loaded.exports.default({ method: "POST", body: { cpf: "123" } }, res);
+    assert.equal(loaded.calls.useCaseExecute[0].config.enrichmentMode, "real");
+    assert.equal(loaded.calls.useCaseConstruct[0].cacheV2TechTrailRead.provider, "techtrail");
+  });
+});
+
+test("invalid ENRICHMENT_MODE fails before composing use case or provider", async () => {
+  await withIsolatedEnvironmentAsync({ ENRICHMENT_MODE: "reall" }, async () => {
+    const loaded = loadAnalyzeForCharacterization({
+      mockUseCase: true,
+      useCaseResult: { statusCode: 200, body: { ok: true } },
+    });
+    const res = response();
+    await withMutedConsoleAsync(() => loaded.exports.default({ method: "POST", body: { cpf: "123" } }, res));
+    assert.equal(res.statusCode, 500);
+    assert.equal(res.body.error, "FUNCTION_INVOCATION_FAILED");
+    assert.equal(loaded.calls.useCaseConstruct.length, 0);
+  });
+});
+
+test("invalid V2 flag fails before any provider is composed", async () => {
+  await withIsolatedEnvironmentAsync({ CACHE_V2_WRITE_ENABLED: "tru" }, async () => {
+    const loaded = loadAnalyzeForCharacterization({
+      mockUseCase: true,
+      useCaseResult: { statusCode: 200, body: { ok: true } },
+    });
+    const res = response();
+    await withMutedConsoleAsync(() => loaded.exports.default({ method: "POST", body: { cpf: "123" } }, res));
+    assert.equal(res.statusCode, 500);
+    assert.equal(res.body.error, "FUNCTION_INVOCATION_FAILED");
+    assert.equal(loaded.calls.useCaseConstruct.length, 0);
+  });
+});
+
+test("invalid Blacklist flag fails before any provider is composed", async () => {
+  await withIsolatedEnvironmentAsync({ IMEI_BLACKLIST_V1_ENABLED: "tru" }, async () => {
+    const loaded = loadAnalyzeForCharacterization({
+      mockUseCase: true,
+      useCaseResult: { statusCode: 200, body: { ok: true } },
+    });
+    const res = response();
+    await withMutedConsoleAsync(() => loaded.exports.default({ method: "POST", body: { cpf: "123" } }, res));
+    assert.equal(res.statusCode, 500);
+    assert.equal(loaded.calls.useCaseConstruct.length, 0);
+  });
+});

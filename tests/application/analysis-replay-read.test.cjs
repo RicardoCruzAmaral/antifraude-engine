@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 const {
   loadAnalyzeUseCaseForCharacterization,
   loadCacheV2FoundationForCharacterization,
+  withIsolatedEnvironmentAsync,
   withMutedConsoleAsync,
 } = require("../helpers/analyze-characterization-harness.cjs");
 const {
@@ -329,12 +330,51 @@ for (const [fromBlacklist, toBlacklist] of [[false, true], [true, false]]) {
     const before = run.calls.enrichment;
     await run.execute({ ...SYNTHETIC_INPUT, imeiCode: null }, { imeiBlacklistV1Enabled: toBlacklist });
     assert.equal(run.calls.enrichment, before + 1);
-    assert.equal(run.replay.calls.gets[0].analysisPolicyVersion,
-      fromBlacklist ? "score-v1|imei-blacklist-v1" : "score-v1|imei-legacy-v1");
-    assert.equal(run.replay.calls.gets[1].analysisPolicyVersion,
-      toBlacklist ? "score-v1|imei-blacklist-v1" : "score-v1|imei-legacy-v1");
+    assert.match(run.replay.calls.gets[0].analysisPolicyVersion,
+      new RegExp(`^score-v1\\|imei-${fromBlacklist ? "blacklist" : "legacy"}-v1\\|cfg:[a-f0-9]{64}$`));
+    assert.match(run.replay.calls.gets[1].analysisPolicyVersion,
+      new RegExp(`^score-v1\\|imei-${toBlacklist ? "blacklist" : "legacy"}-v1\\|cfg:[a-f0-9]{64}$`));
   });
 }
+
+test("mesma request e mesmos pesos permite HIT; alterar um peso força MISS", async () => {
+  const run = fixture({ shadow: true });
+  const body = { ...SYNTHETIC_INPUT, imeiCode: null };
+
+  await withIsolatedEnvironmentAsync({ SCORE_RISCO_MEDIO: "5" }, () => run.execute(body));
+  await withIsolatedEnvironmentAsync({ SCORE_RISCO_MEDIO: "5" }, () => run.execute(body));
+  assert.equal(run.calls.enrichment, 1);
+  assert.equal(run.replay.calls.puts.length, 1);
+
+  await withIsolatedEnvironmentAsync({ SCORE_RISCO_MEDIO: "6" }, () => run.execute(body));
+  assert.equal(run.calls.enrichment, 2);
+  assert.equal(run.replay.calls.puts.length, 2);
+  assert.notEqual(
+    run.replay.calls.gets[0].analysisPolicyVersion,
+    run.replay.calls.gets[2].analysisPolicyVersion
+  );
+});
+
+test("TTL, flags de cache e HMAC não compõem a política decisória", async () => {
+  const run = fixture({ shadow: true });
+  const body = { ...SYNTHETIC_INPUT, imeiCode: null };
+  await withIsolatedEnvironmentAsync({
+    ANALYSIS_REPLAY_TTL_DAYS: "7",
+    CACHE_V2_WRITE_ENABLED: "false",
+    EVIDENCE_LOOKUP_HMAC_KEY: "first-irrelevant-secret",
+  }, () => run.execute(body));
+  await withIsolatedEnvironmentAsync({
+    ANALYSIS_REPLAY_TTL_DAYS: "60",
+    CACHE_V2_WRITE_ENABLED: "true",
+    EVIDENCE_LOOKUP_HMAC_KEY: "second-irrelevant-secret",
+  }, () => run.execute(body));
+
+  assert.equal(run.calls.enrichment, 1);
+  assert.equal(
+    run.replay.calls.gets[0].analysisPolicyVersion,
+    run.replay.calls.gets[1].analysisPolicyVersion
+  );
+});
 
 test("HIT não renova expiry nem executa replay write", async () => {
   const expiresAt = new Date(Date.now() + 86400000).toISOString();

@@ -44,6 +44,18 @@ const CACHE_V2_CONFIG_PATH = path.resolve(
   __dirname,
   "../../src/infrastructure/config/cacheV2Config.ts"
 );
+const ENV_PARSERS_PATH = path.resolve(
+  __dirname,
+  "../../src/infrastructure/config/envParsers.ts"
+);
+const DECISION_POLICY_PATH = path.resolve(
+  __dirname,
+  "../../src/application/cacheV2/decisionPolicy.ts"
+);
+const SCORE_CONFIG_PATH = path.resolve(
+  __dirname,
+  "../../src/domain/engine/scoreConfig.ts"
+);
 
 const ISOLATED_ENV_NAMES = [
   "SUPABASE_URL",
@@ -155,6 +167,9 @@ function loadCacheV2FoundationForCharacterization() {
     adapters: require(CACHE_V2_ADAPTERS_PATH),
     hmac: require(HMAC_LOOKUP_PATH),
     config: require(CACHE_V2_CONFIG_PATH),
+    envParsers: require(ENV_PARSERS_PATH),
+    decisionPolicy: require(DECISION_POLICY_PATH),
+    scoreConfig: require(SCORE_CONFIG_PATH),
   }));
 }
 

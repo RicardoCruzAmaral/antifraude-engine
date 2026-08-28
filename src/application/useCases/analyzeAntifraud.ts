@@ -27,6 +27,7 @@ import {
   readAnalysisReplay,
   resolveAnalysisPolicyVersion,
 } from "../cacheV2/analysisReplayReader";
+import { decisionConfigFingerprint } from "../cacheV2/decisionPolicy";
 export { buildReplayInput } from "../cacheV2/replayInput";
 import type {
   Decision,
@@ -43,6 +44,8 @@ import {
   finalizeEvaluation,
   isConsistentImeiBlacklistFactualStatus,
   preEvaluate,
+  resolveDecisionScoreConfig,
+  type DecisionScoreConfig,
 } from "../../domain/engine";
 
 export type AnalyzeAntifraudDependencies = {
@@ -63,7 +66,7 @@ export type AnalyzeAntifraudDependencies = {
 export type AnalyzeAntifraudConfig = {
   supabaseMissingPolicy: string;
   enrichmentTimeoutMs: number;
-  enrichmentMode: string;
+  enrichmentMode: "off" | "mock" | "real";
   enrichmentFailDecision: Decision;
   imeiTimeoutMs: number;
   imeiPenalty: number;
@@ -72,6 +75,7 @@ export type AnalyzeAntifraudConfig = {
   cacheTtlSecondsTechFail: number;
   decisionCacheV1ReadEnabled?: boolean;
   imeiBlacklistV1Enabled?: boolean;
+  decisionScoreConfig?: DecisionScoreConfig;
 };
 
 export type AnalyzeAntifraudCommand = {
@@ -256,8 +260,18 @@ export class AnalyzeAntifraudUseCase {
     }
     mark("validate_input", true);
 
+    const decisionScoreConfig = config.decisionScoreConfig ?? resolveDecisionScoreConfig();
+    const configFingerprint = decisionConfigFingerprint({
+      scoring: decisionScoreConfig,
+      imeiProblemScore: config.imeiPenalty,
+      enrichmentMode: config.enrichmentMode,
+      enrichmentFailDecision: config.enrichmentFailDecision,
+      enrichmentTimeoutMs: config.enrichmentTimeoutMs,
+      imeiTimeoutMs: config.imeiTimeoutMs,
+    });
     const analysisPolicyVersion = resolveAnalysisPolicyVersion(
-      config.imeiBlacklistV1Enabled === true
+      config.imeiBlacklistV1Enabled === true,
+      configFingerprint
     );
     if (cacheV2ReplayRead) {
       const replay = await readAnalysisReplay(cacheV2ReplayRead, {
@@ -467,7 +481,7 @@ export class AnalyzeAntifraudUseCase {
     let imeiResultGlobal: NormalizedImeiResult | null = null;
 
     if (enrichResult?.ok && enrichResult?.summary) {
-      const preEvaluation = preEvaluate(enrichResult, inputSummary);
+      const preEvaluation = preEvaluate(enrichResult, inputSummary, decisionScoreConfig);
       isHardBlock = preEvaluation.hardBlock.isHardBlock;
       mark("hard_block_check", true, {
         isHardBlock,

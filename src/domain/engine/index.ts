@@ -7,6 +7,7 @@ export {
 } from "./evaluation";
 export { classifyProfileByScore } from "./profiles";
 export { computeScoreLocal } from "./scoring";
+export { resolveDecisionScoreConfig, type DecisionScoreConfig } from "./scoreConfig";
 export {
   classifyImeiBlacklistStatus,
   isConsistentImeiBlacklistFactualStatus,
