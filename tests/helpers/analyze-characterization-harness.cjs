@@ -24,6 +24,18 @@ const ANALYZE_USE_CASE_PATH = path.resolve(
   __dirname,
   "../../src/application/useCases/analyzeAntifraud.ts"
 );
+const CACHE_V2_ADAPTERS_PATH = path.resolve(
+  __dirname,
+  "../../src/infrastructure/persistence/supabase/cacheV2Adapters.ts"
+);
+const HMAC_LOOKUP_PATH = path.resolve(
+  __dirname,
+  "../../src/infrastructure/security/hmacLookupTokenService.ts"
+);
+const CACHE_V2_CONFIG_PATH = path.resolve(
+  __dirname,
+  "../../src/infrastructure/config/cacheV2Config.ts"
+);
 
 const ISOLATED_ENV_NAMES = [
   "SUPABASE_URL",
@@ -62,6 +74,14 @@ const ISOLATED_ENV_NAMES = [
   "CACHE_TTL_DAYS_APROVE",
   "CACHE_TTL_DAYS_DECLINE",
   "CACHE_TTL_SECONDS_ON_TECH_FAIL",
+  "EVIDENCE_LOOKUP_HMAC_KEY",
+  "ANALYSIS_REPLAY_ENABLED",
+  "CACHE_V2_WRITE_ENABLED",
+  "CACHE_V2_READ_TECHTRAIL_ENABLED",
+  "CACHE_V2_READ_IMEI_ENABLED",
+  "DECISION_CACHE_V1_READ_ENABLED",
+  "TECHTRAIL_CACHE_TTL_DAYS",
+  "IMEI_CACHE_TTL_DAYS",
 ];
 
 function transpileAnalyzeForCharacterization() {
@@ -115,6 +135,14 @@ function loadSupabasePersistenceForCharacterization() {
 
 function loadAnalyzeUseCaseForCharacterization() {
   return withTypeScriptLoader(() => require(ANALYZE_USE_CASE_PATH));
+}
+
+function loadCacheV2FoundationForCharacterization() {
+  return withTypeScriptLoader(() => ({
+    adapters: require(CACHE_V2_ADAPTERS_PATH),
+    hmac: require(HMAC_LOOKUP_PATH),
+    config: require(CACHE_V2_CONFIG_PATH),
+  }));
 }
 
 function normalizeProviderInput(body) {
@@ -415,6 +443,7 @@ module.exports = {
   loadActiveEngineForCharacterization,
   loadAnalyzeForCharacterization,
   loadAnalyzeUseCaseForCharacterization,
+  loadCacheV2FoundationForCharacterization,
   loadProviderAdaptersForCharacterization,
   loadSupabasePersistenceForCharacterization,
   projectDecision,

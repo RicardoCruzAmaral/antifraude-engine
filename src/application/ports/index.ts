@@ -23,3 +23,25 @@ export type {
   ImeiRaw,
   ProviderRawRepository,
 } from "./providerRawRepository";
+export type {
+  CacheLookup,
+  EvidenceCompleteness,
+  EvidenceVersions,
+} from "./cacheLookup";
+export type {
+  AnalysisReplayEntry,
+  AnalysisReplayKey,
+  AnalysisReplayRepository,
+  AnalysisReplayResult,
+} from "./analysisReplayRepository";
+export type {
+  EnrichmentEvidence,
+  EnrichmentEvidenceCache,
+  EnrichmentEvidenceKey,
+} from "./enrichmentEvidenceCache";
+export type {
+  ImeiEvidence,
+  ImeiEvidenceCache,
+  ImeiEvidenceKey,
+} from "./imeiEvidenceCache";
+export type { LookupTokenService } from "./lookupTokenService";
