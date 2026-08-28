@@ -6,6 +6,10 @@ import {
 } from "../src/application/useCases/analyzeAntifraud";
 import { techTrailEnrichmentProvider } from "../src/infrastructure/providers/techtrail/techTrailEnrichmentProvider";
 import { imeiInfoProvider } from "../src/infrastructure/providers/imeiInfo/imeiInfoProvider";
+import {
+  createImeiBlacklistProvider,
+  resolveBlacklistServiceId,
+} from "../src/infrastructure/providers/imeiInfo/imeiBlacklistProvider";
 import { createSupabasePersistenceOrNull } from "../src/infrastructure/persistence/supabase/supabasePersistence";
 import { createSupabaseCacheV2AdaptersOrNull } from "../src/infrastructure/persistence/supabase/cacheV2Adapters";
 import { resolveCacheV2Config } from "../src/infrastructure/config/cacheV2Config";
@@ -14,6 +18,7 @@ import { consoleCacheV2ShadowTelemetry } from "../src/infrastructure/telemetry/c
 import type { CacheV2ShadowDependencies } from "../src/application/cacheV2/shadowWriter";
 import type { TechTrailReadDependencies } from "../src/application/cacheV2/techTrailReader";
 import type { ImeiReadDependencies } from "../src/application/cacheV2/imeiReader";
+import type { ImeiBlacklistReadDependencies } from "../src/application/cacheV2/imeiBlacklistReader";
 import { resolveImeiLookupContext } from "../src/providers/imei";
 
 function envInt(name: string, fallback: number) {
@@ -24,6 +29,12 @@ function envInt(name: string, fallback: number) {
 function envStr(name: string, fallback: string) {
   const value = process.env[name];
   return value && value.trim() ? value.trim() : fallback;
+}
+
+function envBool(name: string, fallback: boolean) {
+  const value = process.env[name];
+  if (value === undefined || value.trim() === "") return fallback;
+  return value.trim().toLowerCase() === "true";
 }
 
 function resolveConfig(): AnalyzeAntifraudConfig {
@@ -38,6 +49,7 @@ function resolveConfig(): AnalyzeAntifraudConfig {
     cacheTtlDaysApprove: envInt("CACHE_TTL_DAYS_APPROVE", envInt("CACHE_TTL_DAYS_APROVE", 30)),
     cacheTtlDaysDecline: envInt("CACHE_TTL_DAYS_DECLINE", 30),
     cacheTtlSecondsTechFail: envInt("CACHE_TTL_SECONDS_ON_TECH_FAIL", 300),
+    imeiBlacklistV1Enabled: envBool("IMEI_BLACKLIST_V1_ENABLED", false),
   };
 }
 
@@ -45,10 +57,15 @@ type CacheV2Composition = {
   shadow?: CacheV2ShadowDependencies;
   techTrailRead?: TechTrailReadDependencies;
   imeiRead?: ImeiReadDependencies;
+  imeiBlacklistRead?: ImeiBlacklistReadDependencies;
   decisionCacheV1ReadEnabled: boolean;
 };
 
-function composeCacheV2(traceId: string): CacheV2Composition {
+function composeCacheV2(
+  traceId: string,
+  blacklistEnabled: boolean,
+  blacklistService: string | null
+): CacheV2Composition {
   let config;
   try {
     config = resolveCacheV2Config();
@@ -95,6 +112,8 @@ function composeCacheV2(traceId: string): CacheV2Composition {
     techTrailNormalizerVersion: "techtrail-normalizer-v1",
     imeiProviderContractVersion: "imei-info-v1",
     imeiNormalizerVersion: "imei-normalizer-v2",
+    imeiBlacklistProviderContractVersion: "imei-info-blacklist-v1",
+    imeiBlacklistNormalizerVersion: "imei-blacklist-normalizer-v1",
   };
   const shadow: CacheV2ShadowDependencies | undefined = config.writeEnabled ? {
     analysisReplayRepository: adapters?.analysisReplayRepository ?? null,
@@ -116,7 +135,7 @@ function composeCacheV2(traceId: string): CacheV2Composition {
     normalizerVersion: versions.techTrailNormalizerVersion,
     cacheSchemaVersion: versions.cacheSchemaVersion,
   } : undefined;
-  const imeiRead: ImeiReadDependencies | undefined = config.readImeiEnabled ? {
+  const imeiRead: ImeiReadDependencies | undefined = config.readImeiEnabled && !blacklistEnabled ? {
     imeiEvidenceCache: adapters?.imeiEvidenceCache ?? null,
     lookupTokenService,
     telemetry: consoleCacheV2ShadowTelemetry,
@@ -126,10 +145,21 @@ function composeCacheV2(traceId: string): CacheV2Composition {
     cacheSchemaVersion: versions.cacheSchemaVersion,
     resolveContext: resolveImeiLookupContext,
   } : undefined;
+  const imeiBlacklistRead: ImeiBlacklistReadDependencies | undefined = config.readImeiEnabled && blacklistEnabled ? {
+    imeiEvidenceCache: adapters?.imeiEvidenceCache ?? null,
+    lookupTokenService,
+    telemetry: consoleCacheV2ShadowTelemetry,
+    provider: "imei_info",
+    service: blacklistService,
+    providerContractVersion: versions.imeiBlacklistProviderContractVersion,
+    normalizerVersion: versions.imeiBlacklistNormalizerVersion,
+    cacheSchemaVersion: versions.cacheSchemaVersion,
+  } : undefined;
   return {
     shadow,
     techTrailRead,
     imeiRead,
+    imeiBlacklistRead,
     decisionCacheV1ReadEnabled: config.decisionCacheV1ReadEnabled,
   };
 }
@@ -144,23 +174,33 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(405).json({ ok: false, traceId, error: "Method not allowed" });
     }
 
-    const cacheV2 = composeCacheV2(traceId);
+    const analyzeConfig = resolveConfig();
+    const blacklistServiceId = resolveBlacklistServiceId(process.env.IMEI_BLACKLIST_SERVICE_ID);
+    const blacklistProvider = createImeiBlacklistProvider(blacklistServiceId);
+    const cacheV2 = composeCacheV2(
+      traceId,
+      analyzeConfig.imeiBlacklistV1Enabled === true,
+      blacklistProvider.service
+    );
     const useCase = new AnalyzeAntifraudUseCase({
       enrichmentProvider: techTrailEnrichmentProvider,
       imeiProvider: imeiInfoProvider,
+      imeiBlacklistProvider: blacklistProvider,
       decisionCache: persistence?.decisionCache ?? null,
       decisionAuditRepository: persistence?.decisionAuditRepository ?? null,
       providerRawRepository: persistence?.providerRawRepository ?? null,
       cacheV2Shadow: cacheV2.shadow,
       cacheV2TechTrailRead: cacheV2.techTrailRead,
       cacheV2ImeiRead: cacheV2.imeiRead,
+      cacheV2ImeiBlacklistRead: cacheV2.imeiBlacklistRead,
+      imeiBlacklistTelemetry: consoleCacheV2ShadowTelemetry,
     });
     const result = await useCase.execute({
       body: req.body,
       traceId,
       startedAtMs,
       config: {
-        ...resolveConfig(),
+        ...analyzeConfig,
         decisionCacheV1ReadEnabled: cacheV2.decisionCacheV1ReadEnabled,
       },
     });

@@ -3,6 +3,7 @@ import type {
   FinalEvaluationResult,
   InputSummary,
   NormalizedImeiResult,
+  ImeiBlacklistStatus,
   PreEvaluationResult,
   TelemetryFlags,
 } from "../contracts";
@@ -113,5 +114,37 @@ export function finalizeEvaluation(
     reasons,
     profile,
     decision,
+  };
+}
+
+export function finalizeBlacklistEvaluation(
+  preEvaluation: PreEvaluationResult,
+  blacklistStatus: ImeiBlacklistStatus | null,
+  imeiInvalidScore: number
+): FinalEvaluationResult {
+  if (preEvaluation.hardBlock.isHardBlock) {
+    return finalizeEvaluation(preEvaluation, null, 0);
+  }
+
+  if (blacklistStatus === "INVALID") {
+    return finalizeEvaluation(preEvaluation, {
+      ok: false,
+      provider: "imei_info",
+      ms: 0,
+      reason: "IMEI_INVALID",
+      brandExpected: "UNKNOWN",
+      brandReturned: null,
+      serviceId: null,
+      summary: null,
+      raw: null,
+    }, imeiInvalidScore);
+  }
+
+  const base = finalizeEvaluation(preEvaluation, null, 0);
+  if (blacklistStatus !== "BLACKLISTED") return base;
+  return {
+    ...base,
+    decision: "DECLINE",
+    reasons: [...base.reasons, "IMEI_BLACKLISTED"],
   };
 }

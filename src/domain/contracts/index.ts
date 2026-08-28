@@ -28,3 +28,8 @@ export type {
   NormalizedImeiResult,
   NormalizedImeiSummary,
 } from "./imei";
+export type {
+  ImeiBlacklistEvidence,
+  ImeiBlacklistProviderFields,
+  ImeiBlacklistStatus,
+} from "./imeiBlacklist";

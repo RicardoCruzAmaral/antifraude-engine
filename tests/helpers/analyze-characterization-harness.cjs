@@ -16,6 +16,14 @@ const IMEI_INFO_PROVIDER_PATH = path.resolve(
   __dirname,
   "../../src/infrastructure/providers/imeiInfo/imeiInfoProvider.ts"
 );
+const IMEI_BLACKLIST_PROVIDER_PATH = path.resolve(
+  __dirname,
+  "../../src/infrastructure/providers/imeiInfo/imeiBlacklistProvider.ts"
+);
+const IMEI_BLACKLIST_CORE_PATH = path.resolve(
+  __dirname,
+  "../../src/providers/imeiBlacklist.ts"
+);
 const SUPABASE_PERSISTENCE_PATH = path.resolve(
   __dirname,
   "../../src/infrastructure/persistence/supabase/supabasePersistence.ts"
@@ -70,6 +78,8 @@ const ISOLATED_ENV_NAMES = [
   "IMEI_INFO_SERVICE_ID_SAMSUNG",
   "IMEI_INFO_SERVICE_ID_APPLE",
   "IMEI_INFO_SERVICE_ID_XIAOMI",
+  "IMEI_BLACKLIST_V1_ENABLED",
+  "IMEI_BLACKLIST_SERVICE_ID",
   "CACHE_TTL_DAYS_APPROVE",
   "CACHE_TTL_DAYS_APROVE",
   "CACHE_TTL_DAYS_DECLINE",
@@ -127,6 +137,8 @@ function loadProviderAdaptersForCharacterization() {
   return withTypeScriptLoader(() => ({
     enrichment: require(TECHTRAIL_PROVIDER_PATH),
     imei: require(IMEI_INFO_PROVIDER_PATH),
+    imeiBlacklist: require(IMEI_BLACKLIST_PROVIDER_PATH),
+    imeiBlacklistCore: require(IMEI_BLACKLIST_CORE_PATH),
   }));
 }
 

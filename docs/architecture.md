@@ -108,3 +108,55 @@ A evidência factual não persiste `brandExpected` nem um `IMEI_BRAND_MISMATCH` 
 Um HIT não cria `imei_raw`, não renova `fetchedAt`/`expiresAt` e não dispara shadow rewrite. Proveniência (source, artifact/reference, fetched/expiry, age, provider e service) fica somente na auditoria interna; o contrato HTTP público não muda. `IMEI_CACHE_TTL_DAYS` tem default independente de 30 dias e aceita override por ENV.
 
 Analysis Replay read continua inexistente.
+
+## IMEI Blacklist V1 — AVAILABLE BEHIND FLAG
+
+`IMEI_BLACKLIST_V1_ENABLED=false` é o default de desenvolvimento e preserva integralmente o provider IMEI legado, inclusive seleção de serviços por marca, brand mismatch e penalidades históricas. Quando a flag está ligada, o fluxo muda deliberadamente:
+
+```text
+TechTrail
+  → hard blocks
+  → score e profile base
+  → somente B1/B2 com IMEI válido são elegíveis
+  → IMEI Blacklist Cache V2
+  → IMEI.info BLACKLIST em cache miss
+  → CLEAN mantém score/profile/decisão
+  → BLACKLISTED força DECLINE
+  → UNKNOWN/UNAVAILABLE não são fraude
+```
+
+Perfis A e C, hard blocks e B1/B2 sem IMEI não consultam cache nem provider. A validação local mantém sanitização, 15 dígitos e Luhn antes de qualquer chamada paga. `IMEI_INVALID` preserva temporariamente a penalidade legada configurada; timeout, HTTP error, exception e indisponibilidade de configuração não recebem pontos.
+
+O provider novo não recebe `modelo_declarado` e usa exclusivamente `IMEI_BLACKLIST_SERVICE_ID`. Não há ID default: ausente, vazio ou inválido resulta em `UNAVAILABLE`, zero chamada HTTP e decisão baseada somente na pessoa. Os serviços Apple, Samsung e Xiaomi e a inferência por marca continuam presentes exclusivamente no caminho LEGACY/ROLLBACK quando a flag está desligada.
+
+### Contrato e normalização Blacklist
+
+A evidência normalizada suporta somente: status, model, modelName, manufacturer, blacklistStatusRaw, generalListStatus, blacklistRecords, deviceIsClean e providerCreatedAt. IMEI cru, modelo declarado, marca esperada e brand mismatch não são persistidos em `normalized_evidence`.
+
+- `CLEAN`: exige simultaneamente `blacklist_status=Clean`, `general_list_status=No`, `blacklist_records=0` e `device_is_clean=true`.
+- `BLACKLISTED`: exige sinal explícito (`Blacklisted`/`Blacklist`, general list `Yes`, registros acima de zero ou `device_is_clean=false`) sem sinal limpo contraditório.
+- `UNKNOWN`: resposta válida, porém incompleta, desconhecida ou contraditória.
+- `UNAVAILABLE`: configuração/API key ausente, timeout, exception, HTTP não-2xx, JSON inválido, rejeição genérica ou IMEI retornado divergente.
+
+Somente validação local inválida ou retorno explícito `Invalid IMEI` produz `IMEI_INVALID`; rejeições técnicas não são convertidas em fraude.
+
+### Cache, versões e decisão
+
+A identidade Blacklist é:
+
+```text
+HMAC(IMEI sanitizado)
++ provider imei_info
++ service blacklist:<IMEI_BLACKLIST_SERVICE_ID>
++ imei-info-blacklist-v1
++ imei-blacklist-normalizer-v1
++ cache-v2-schema-v1
+```
+
+As versões e o namespace de serviço impedem que evidências Apple/Samsung/Xiaomi sejam interpretadas como Blacklist. Cold miss é esperado. `CLEAN`, `BLACKLISTED` e `UNKNOWN` válidos podem ser cacheados por `IMEI_CACHE_TTL_DAYS`, default independente de 30 dias. `UNAVAILABLE` e falhas técnicas nunca são cacheadas. HIT não grava raw, não renova TTL e não faz shadow rewrite.
+
+`BLACKLISTED` mantém score e profile base B1/B2, força `DECLINE` e acrescenta `IMEI_BLACKLISTED` aos reasons sem pontos artificiais. `CLEAN`, `UNKNOWN` e `UNAVAILABLE` preservam a decisão da pessoa.
+
+Enquanto a política Blacklist está ligada, o `decision_cache` V1 por CPF é ignorado para leitura e escrita. Isso evita tanto pular uma consulta Blacklist por um APPROVE antigo quanto contaminar o rollback legado com uma decisão nova. A auditoria usa `score-v1+imei-blacklist-v1`; o caminho legado mantém `score-v1`.
+
+Telemetria Blacklist é interna/audit-only e não é acrescentada aos events HTTP públicos. Analysis Replay read continua inativo.

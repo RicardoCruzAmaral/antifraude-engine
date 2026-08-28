@@ -21,6 +21,17 @@ export type CacheV2ShadowEvent = {
     | "cache_v2_imei_read_incompatible"
     | "cache_v2_imei_read_backend_error"
     | "cache_v2_imei_read_bypass"
+    | "IMEI_BLACKLIST_CACHE_HIT"
+    | "IMEI_BLACKLIST_CACHE_MISS"
+    | "IMEI_BLACKLIST_CLEAN"
+    | "IMEI_BLACKLISTED"
+    | "IMEI_BLACKLIST_UNKNOWN"
+    | "IMEI_BLACKLIST_UNAVAILABLE"
+    | "IMEI_BLACKLIST_INVALID"
+    | "IMEI_BLACKLIST_SKIPPED_PROFILE_A"
+    | "IMEI_BLACKLIST_SKIPPED_PROFILE_C"
+    | "IMEI_BLACKLIST_SKIPPED_HARD_BLOCK"
+    | "IMEI_BLACKLIST_SKIPPED_NO_IMEI"
     | "cache_v2_configuration_error";
   traceId: string;
   reason?: string;

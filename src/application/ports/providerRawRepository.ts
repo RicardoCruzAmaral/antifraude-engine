@@ -1,4 +1,4 @@
-import type { NormalizedImeiResult } from "../../domain/contracts";
+import type { ImeiBlacklistEvidence, NormalizedImeiResult } from "../../domain/contracts";
 
 export type EnrichmentRaw = {
   traceId: string;
@@ -24,4 +24,10 @@ export type ImeiRaw = {
 export interface ProviderRawRepository {
   saveEnrichment(enrichment: EnrichmentRaw): Promise<void>;
   saveImei(imei: ImeiRaw): Promise<void>;
+  saveImeiBlacklist?(input: {
+    traceId: string;
+    cpf: string;
+    imeiCode: string | null;
+    result: ImeiBlacklistEvidence;
+  }): Promise<void>;
 }

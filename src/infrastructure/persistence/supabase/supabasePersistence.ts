@@ -154,6 +154,40 @@ export function createSupabasePersistence(client: SupabaseLike): SupabasePersist
         console.error("[imei_raw] insert failed", err);
       }
     },
+
+    async saveImeiBlacklist(row) {
+      try {
+        await client.from("imei_raw").insert({
+          trace_id: row.traceId,
+          cpf: row.cpf,
+          provider: row.result.provider,
+          ok: row.result.status === "CLEAN" || row.result.status === "BLACKLISTED" || row.result.status === "UNKNOWN",
+          http_status: row.result.httpStatus,
+          latency_ms: row.result.latencyMs,
+          service_id: row.result.service?.startsWith("blacklist:")
+            ? Number(row.result.service.slice("blacklist:".length))
+            : null,
+          brand_expected: null,
+          brand_returned: row.result.manufacturer,
+          reason: `IMEI_BLACKLIST_${row.result.status}`,
+          request_params: { imeiCode: row.imeiCode, policy: "BLACKLIST_V1" },
+          summary_json: {
+            model: row.result.model,
+            modelName: row.result.modelName,
+            manufacturer: row.result.manufacturer,
+            blacklistStatusRaw: row.result.blacklistStatusRaw,
+            generalListStatus: row.result.generalListStatus,
+            blacklistRecords: row.result.blacklistRecords,
+            deviceIsClean: row.result.deviceIsClean,
+            providerCreatedAt: row.result.providerCreatedAt,
+          },
+          response_json: row.result.raw ?? null,
+          created_at: nowIso(),
+        });
+      } catch (err) {
+        console.error("[imei_raw] blacklist insert failed", err);
+      }
+    },
   };
 
   return { decisionCache, decisionAuditRepository, providerRawRepository };

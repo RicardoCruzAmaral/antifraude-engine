@@ -7,10 +7,12 @@ import type {
   LookupTokenService,
 } from "../ports";
 import type {
+  ImeiBlacklistEvidence,
   InputSummary,
   NormalizedImeiResult,
 } from "../../domain/contracts";
 import { buildReplayInput } from "./replayInput";
+import { isConsistentImeiBlacklistFactualStatus } from "../../domain/engine";
 
 export type CacheV2ShadowVersions = {
   cacheSchemaVersion: string;
@@ -18,6 +20,8 @@ export type CacheV2ShadowVersions = {
   techTrailNormalizerVersion: string;
   imeiProviderContractVersion: string;
   imeiNormalizerVersion: string;
+  imeiBlacklistProviderContractVersion?: string;
+  imeiBlacklistNormalizerVersion?: string;
 };
 
 export type CacheV2ShadowDependencies = {
@@ -117,6 +121,66 @@ export async function shadowWriteImei(
     emit(dependencies, { name: "cache_v2_imei_write_success", traceId: input.traceId });
   } catch (error) {
     console.error("[cache-v2-shadow] IMEI write failed", error);
+    emit(dependencies, { name: "cache_v2_imei_write_error", traceId: input.traceId, reason: "WRITE_FAILED" });
+  }
+}
+
+export async function shadowWriteImeiBlacklist(
+  dependencies: CacheV2ShadowDependencies,
+  input: { traceId: string; result: ImeiBlacklistEvidence }
+) {
+  const result = input.result;
+  const fetchedAtMs = Date.parse(result.fetchedAt);
+  const factualFields = {
+    model: result.model,
+    modelName: result.modelName,
+    manufacturer: result.manufacturer,
+    blacklistStatusRaw: result.blacklistStatusRaw,
+    generalListStatus: result.generalListStatus,
+    blacklistRecords: result.blacklistRecords,
+    deviceIsClean: result.deviceIsClean,
+    providerCreatedAt: result.providerCreatedAt,
+    imeiNumber: null,
+  };
+  if (!dependencies.versions.imeiBlacklistProviderContractVersion ||
+      !dependencies.versions.imeiBlacklistNormalizerVersion ||
+      !result.imei || result.provider !== "imei_info" || !result.service || !result.service.startsWith("blacklist:") ||
+      !Number.isFinite(fetchedAtMs) || fetchedAtMs > Date.now() ||
+      !isConsistentImeiBlacklistFactualStatus(result.status, factualFields)) {
+    emit(dependencies, { name: "cache_v2_imei_write_skipped", traceId: input.traceId, reason: "INVALID_OR_TECHNICAL_RESULT" });
+    return;
+  }
+  if (!dependencies.lookupTokenService || !dependencies.imeiEvidenceCache) {
+    emit(dependencies, { name: "cache_v2_imei_write_skipped", traceId: input.traceId, reason: "DEPENDENCY_UNAVAILABLE" });
+    return;
+  }
+  try {
+    await dependencies.imeiEvidenceCache.put({
+      lookupToken: dependencies.lookupTokenService.tokenizeImei(result.imei),
+      provider: result.provider,
+      service: result.service,
+      normalizedEvidence: {
+        status: result.status,
+        model: factualFields.model,
+        modelName: factualFields.modelName,
+        manufacturer: factualFields.manufacturer,
+        blacklistStatusRaw: factualFields.blacklistStatusRaw,
+        generalListStatus: factualFields.generalListStatus,
+        blacklistRecords: factualFields.blacklistRecords,
+        deviceIsClean: factualFields.deviceIsClean,
+        providerCreatedAt: factualFields.providerCreatedAt,
+      },
+      fetchedAt: result.fetchedAt,
+      expiresAt: addDays(result.fetchedAt, dependencies.imeiTtlDays),
+      providerContractVersion: dependencies.versions.imeiBlacklistProviderContractVersion,
+      normalizerVersion: dependencies.versions.imeiBlacklistNormalizerVersion,
+      cacheSchemaVersion: dependencies.versions.cacheSchemaVersion,
+      completeness: "COMPLETE",
+      rawReference: result.rawReference,
+    });
+    emit(dependencies, { name: "cache_v2_imei_write_success", traceId: input.traceId });
+  } catch (error) {
+    console.error("[cache-v2-shadow] IMEI Blacklist write failed", error);
     emit(dependencies, { name: "cache_v2_imei_write_error", traceId: input.traceId, reason: "WRITE_FAILED" });
   }
 }

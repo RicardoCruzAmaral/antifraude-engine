@@ -161,6 +161,44 @@ test("DECISION_CACHE_V1_READ_ENABLED é transportada explicitamente", async () =
   });
 });
 
+test("IMEI_BLACKLIST_V1_ENABLED compõe provider e cache Blacklist versionado", async () => {
+  await withIsolatedEnvironmentAsync({
+    IMEI_BLACKLIST_V1_ENABLED: "true",
+    IMEI_BLACKLIST_SERVICE_ID: "777",
+    CACHE_V2_READ_IMEI_ENABLED: "true",
+    EVIDENCE_LOOKUP_HMAC_KEY: "synthetic-composition-key",
+    SUPABASE_URL: "https://composition.invalid",
+    SUPABASE_SERVICE_ROLE_KEY: "synthetic-test-key",
+  }, async () => {
+    const loaded = loadAnalyzeForCharacterization({
+      mockUseCase: true,
+      useCaseResult: { statusCode: 200, body: { ok: true } },
+    });
+    const res = response();
+    await loaded.exports.default({ method: "POST", body: { cpf: "123" } }, res);
+    const dependencies = loaded.calls.useCaseConstruct[0];
+    assert.equal(dependencies.imeiBlacklistProvider.service, "blacklist:777");
+    assert.equal(dependencies.cacheV2ImeiRead, undefined);
+    assert.equal(dependencies.cacheV2ImeiBlacklistRead.service, "blacklist:777");
+    assert.equal(dependencies.cacheV2ImeiBlacklistRead.providerContractVersion, "imei-info-blacklist-v1");
+    assert.equal(dependencies.cacheV2ImeiBlacklistRead.normalizerVersion, "imei-blacklist-normalizer-v1");
+    assert.equal(loaded.calls.useCaseExecute[0].config.imeiBlacklistV1Enabled, true);
+  });
+});
+
+test("service ID Blacklist ausente permanece indisponível sem default inventado", async () => {
+  await withIsolatedEnvironmentAsync({ IMEI_BLACKLIST_V1_ENABLED: "true" }, async () => {
+    const loaded = loadAnalyzeForCharacterization({
+      mockUseCase: true,
+      useCaseResult: { statusCode: 200, body: { ok: true } },
+    });
+    const res = response();
+    await loaded.exports.default({ method: "POST", body: { cpf: "123" } }, res);
+    assert.equal(loaded.calls.useCaseConstruct[0].imeiBlacklistProvider.service, null);
+    assert.equal(loaded.calls.useCaseExecute[0].config.imeiBlacklistV1Enabled, true);
+  });
+});
+
 test("shadow habilitado sem HMAC não derruba composição V1", async () => {
   await withIsolatedEnvironmentAsync({ CACHE_V2_WRITE_ENABLED: "true" }, async () => {
     const loaded = loadAnalyzeForCharacterization({

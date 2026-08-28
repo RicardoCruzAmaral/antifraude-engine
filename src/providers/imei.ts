@@ -37,7 +37,7 @@ function normalizeText(s: any): string {
     .replace(/\p{Diacritic}/gu, "");
 }
 
-function onlyDigits(s: any): string {
+export function normalizeImei(s: any): string {
   return String(s || "").replace(/\D/g, "");
 }
 
@@ -101,7 +101,7 @@ function normalizeReturnedBrand(rawResult: any): string | null {
 }
 
 export function isValidImei(imei: string): boolean {
-  const clean = onlyDigits(imei);
+  const clean = normalizeImei(imei);
   if (clean.length !== 15) return false;
 
   let sum = 0;
@@ -249,7 +249,7 @@ export async function imeiCheckReal(input: {
   timeoutMs: number;
 }): Promise<ImeiCheckResult> {
   const started = Date.now();
-  const imei = onlyDigits(input.imeiCode);
+  const imei = normalizeImei(input.imeiCode);
   const brandExpected = inferBrand(input.modeloDeclarado);
 
   if (!imei || !isValidImei(imei)) {
@@ -399,7 +399,7 @@ export function resolveImeiLookupContext(input: {
   imeiCode: string;
   modeloDeclarado?: string | null;
 }) {
-  const normalizedImei = onlyDigits(input.imeiCode);
+  const normalizedImei = normalizeImei(input.imeiCode);
   const brandExpected = inferBrand(input.modeloDeclarado);
   const serviceId = normalizedImei && isValidImei(normalizedImei)
     ? getServiceIdByBrand(brandExpected)

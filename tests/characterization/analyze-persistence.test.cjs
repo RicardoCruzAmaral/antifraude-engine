@@ -274,6 +274,29 @@ test("imei_raw ignora error retornado pelo SDK e captura exception", async () =>
   assert.equal(thrownError.calls[0].table, "imei_raw");
 });
 
+test("adapter persiste raw Blacklist sem autoridade de modelo declarado", async () => {
+  const fake = fakeSupabase();
+  const { createSupabasePersistence } = loadSupabasePersistenceForCharacterization();
+  await createSupabasePersistence(fake.client).providerRawRepository.saveImeiBlacklist({
+    traceId: "blacklist-trace", cpf: "123", imeiCode: "490154203237518",
+    result: {
+      imei: "490154203237518", provider: "imei_info", service: "blacklist:777",
+      status: "BLACKLISTED", model: "A", modelName: "Phone A", manufacturer: "Maker",
+      blacklistStatusRaw: "Blacklisted", generalListStatus: "Yes", blacklistRecords: 1,
+      deviceIsClean: false, providerCreatedAt: "2026-08-01T00:00:00Z",
+      fetchedAt: "2026-08-28T00:00:00Z", rawReference: null,
+      httpStatus: 200, latencyMs: 10, raw: { synthetic: true },
+    },
+  });
+  const row = fake.calls[0].row;
+  assert.equal(fake.calls[0].table, "imei_raw");
+  assert.equal(row.service_id, 777);
+  assert.equal(row.reason, "IMEI_BLACKLIST_BLACKLISTED");
+  assert.equal(row.brand_expected, null);
+  assert.deepEqual(row.request_params, { imeiCode: "490154203237518", policy: "BLACKLIST_V1" });
+  assert.equal(Object.hasOwn(row.request_params, "modeloDeclarado"), false);
+});
+
 test("erros de cache, logs e raws no adapter não derrubam a request", async () => {
   const fake = fakeSupabase({
     getResult: { data: null, error: new Error("cache-read") },

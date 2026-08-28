@@ -10,6 +10,10 @@ export type {
   ImeiProviderInput,
 } from "./imeiProvider";
 export type {
+  ImeiBlacklistProvider,
+  ImeiBlacklistValidation,
+} from "./imeiBlacklistProvider";
+export type {
   DecisionCache,
   DecisionCacheEntry,
   DecisionCacheWrite,

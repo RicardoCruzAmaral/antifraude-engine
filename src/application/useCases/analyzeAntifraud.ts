@@ -4,11 +4,15 @@ import type {
   EnrichmentProvider,
   EnrichmentProviderInput,
   ImeiProvider,
+  ImeiBlacklistProvider,
+  CacheV2ShadowTelemetry,
+  CacheV2ShadowEvent,
   ProviderRawRepository,
 } from "../ports";
 import type { CacheV2ShadowDependencies } from "../cacheV2/shadowWriter";
 import {
   shadowWriteImei,
+  shadowWriteImeiBlacklist,
   shadowWriteReplay,
   shadowWriteTechTrail,
 } from "../cacheV2/shadowWriter";
@@ -16,24 +20,38 @@ import type { TechTrailReadDependencies } from "../cacheV2/techTrailReader";
 import { readTechTrailEvidence } from "../cacheV2/techTrailReader";
 import type { ImeiReadDependencies } from "../cacheV2/imeiReader";
 import { readImeiEvidence } from "../cacheV2/imeiReader";
+import type { ImeiBlacklistReadDependencies } from "../cacheV2/imeiBlacklistReader";
+import { readImeiBlacklistEvidence } from "../cacheV2/imeiBlacklistReader";
 export { buildReplayInput } from "../cacheV2/replayInput";
 import type {
   Decision,
+  FinalEvaluationResult,
+  ImeiBlacklistEvidence,
+  ImeiBlacklistStatus,
   InputSummary,
   NormalizedImeiResult,
   ScoreBreakdownItem,
 } from "../../domain/contracts";
-import { finalizeEvaluation, preEvaluate } from "../../domain/engine";
+import {
+  classifyProfileByScore,
+  finalizeBlacklistEvaluation,
+  finalizeEvaluation,
+  isConsistentImeiBlacklistFactualStatus,
+  preEvaluate,
+} from "../../domain/engine";
 
 export type AnalyzeAntifraudDependencies = {
   enrichmentProvider: EnrichmentProvider;
   imeiProvider: ImeiProvider;
+  imeiBlacklistProvider?: ImeiBlacklistProvider;
   decisionCache: DecisionCache | null;
   decisionAuditRepository: DecisionAuditRepository | null;
   providerRawRepository: ProviderRawRepository | null;
   cacheV2Shadow?: CacheV2ShadowDependencies;
   cacheV2TechTrailRead?: TechTrailReadDependencies;
   cacheV2ImeiRead?: ImeiReadDependencies;
+  cacheV2ImeiBlacklistRead?: ImeiBlacklistReadDependencies;
+  imeiBlacklistTelemetry?: CacheV2ShadowTelemetry;
 };
 
 export type AnalyzeAntifraudConfig = {
@@ -47,6 +65,7 @@ export type AnalyzeAntifraudConfig = {
   cacheTtlDaysDecline: number;
   cacheTtlSecondsTechFail: number;
   decisionCacheV1ReadEnabled?: boolean;
+  imeiBlacklistV1Enabled?: boolean;
 };
 
 export type AnalyzeAntifraudCommand = {
@@ -63,6 +82,38 @@ export type AnalyzeAntifraudResult = {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function unavailableBlacklistEvidence(imei: string, service: string | null, reason: string): ImeiBlacklistEvidence {
+  return {
+    imei, provider: "imei_info", service, status: "UNAVAILABLE",
+    model: null, modelName: null, manufacturer: null, blacklistStatusRaw: null,
+    generalListStatus: null, blacklistRecords: null, deviceIsClean: null,
+    providerCreatedAt: null, fetchedAt: nowIso(), rawReference: null,
+    httpStatus: null, latencyMs: 0, technicalReason: reason, raw: null,
+  };
+}
+
+function validBlacklistProviderEvidence(
+  result: ImeiBlacklistEvidence,
+  expectedImei: string,
+  expectedService: string
+) {
+  const fetchedAt = result ? Date.parse(result.fetchedAt) : Number.NaN;
+  if (!result || result.imei !== expectedImei || result.provider !== "imei_info" ||
+      result.service !== expectedService || !Number.isFinite(fetchedAt) || fetchedAt > Date.now()) return false;
+  if (result.status === "UNAVAILABLE" || result.status === "INVALID") return true;
+  return isConsistentImeiBlacklistFactualStatus(result.status, {
+    model: result.model,
+    modelName: result.modelName,
+    manufacturer: result.manufacturer,
+    blacklistStatusRaw: result.blacklistStatusRaw,
+    generalListStatus: result.generalListStatus,
+    blacklistRecords: result.blacklistRecords,
+    deviceIsClean: result.deviceIsClean,
+    providerCreatedAt: result.providerCreatedAt,
+    imeiNumber: null,
+  });
 }
 
 function onlyDigits(value: string) {
@@ -135,12 +186,15 @@ export class AnalyzeAntifraudUseCase {
     const {
       enrichmentProvider,
       imeiProvider,
+      imeiBlacklistProvider,
       decisionCache,
       decisionAuditRepository,
       providerRawRepository,
       cacheV2Shadow,
       cacheV2TechTrailRead,
       cacheV2ImeiRead,
+      cacheV2ImeiBlacklistRead,
+      imeiBlacklistTelemetry,
     } = this.dependencies;
     const hasPersistence = !!decisionCache && !!decisionAuditRepository && !!providerRawRepository;
     const events: any[] = [];
@@ -152,8 +206,14 @@ export class AnalyzeAntifraudUseCase {
       result: NormalizedImeiResult;
       fetchedAt: string;
     } | null = null;
+    let imeiBlacklistShadowCandidate: ImeiBlacklistEvidence | null = null;
     const mark = (step: string, ok: boolean, meta?: any) => {
       events.push({ ts: nowIso(), ms: Date.now() - started, step, ok, meta: meta ?? undefined });
+    };
+    const recordBlacklist = (name: CacheV2ShadowEvent["name"], ok: boolean, meta?: any, emitTelemetry = true) => {
+      auditOnlyEvents.push({ ts: nowIso(), ms: Date.now() - started, step: name, ok, meta: meta ?? undefined });
+      try { if (emitTelemetry) imeiBlacklistTelemetry?.record({ name, traceId, reason: meta?.reason, details: meta }); }
+      catch (error) { console.error("[imei-blacklist] telemetry failed", error); }
     };
 
     mark("request_received", true);
@@ -203,7 +263,7 @@ export class AnalyzeAntifraudUseCase {
 
     let hit = null;
     let cacheGetMs = 0;
-    if (hasPersistence && config.decisionCacheV1ReadEnabled !== false) {
+    if (hasPersistence && config.decisionCacheV1ReadEnabled !== false && config.imeiBlacklistV1Enabled !== true) {
       const cacheGetStarted = Date.now();
       try {
         hit = await decisionCache.get(cpf);
@@ -212,6 +272,11 @@ export class AnalyzeAntifraudUseCase {
       }
       cacheGetMs = Date.now() - cacheGetStarted;
       mark("cache_get", true, { hit: !!hit, cacheGetMs });
+    } else if (config.imeiBlacklistV1Enabled === true && hasPersistence) {
+      auditOnlyEvents.push({
+        ts: nowIso(), ms: Date.now() - started,
+        step: "cache_get_skipped_blacklist_policy", ok: true,
+      });
     } else {
       mark("cache_get_skipped_no_supabase", true);
     }
@@ -370,7 +435,9 @@ export class AnalyzeAntifraudUseCase {
     let reasons: string[] = [];
     let score: number | null = null;
     let scoreBreakdown: ScoreBreakdownItem[] = [];
-    const ruleVersion = "score-v1";
+    const ruleVersion = config.imeiBlacklistV1Enabled === true
+      ? "score-v1+imei-blacklist-v1"
+      : "score-v1";
     let isTechFail = false;
     let isHardBlock = false;
     let imeiResultGlobal: NormalizedImeiResult | null = null;
@@ -383,6 +450,9 @@ export class AnalyzeAntifraudUseCase {
         reasons: preEvaluation.hardBlock.reasons,
       });
       if (isHardBlock) {
+        if (config.imeiBlacklistV1Enabled === true) {
+          recordBlacklist("IMEI_BLACKLIST_SKIPPED_HARD_BLOCK", true, { reason: "HARD_BLOCK" });
+        }
         const evaluation = finalizeEvaluation(preEvaluation, null, 0);
         decision = evaluation.decision;
         reasons = evaluation.reasons;
@@ -395,6 +465,130 @@ export class AnalyzeAntifraudUseCase {
         const scoreComputedMeta = { score, breakdown: scoreBreakdown, flags };
         mark("score_computed", true, scoreComputedMeta);
         let imeiResult: NormalizedImeiResult | null = null;
+        let blacklistResult: ImeiBlacklistEvidence | null = null;
+        let evaluation: FinalEvaluationResult;
+        if (config.imeiBlacklistV1Enabled === true) {
+          const baseProfile = classifyProfileByScore(preEvaluation.baseScore ?? 0);
+          if (baseProfile === "A" || baseProfile === "C") {
+            const eventName = baseProfile === "A"
+              ? "IMEI_BLACKLIST_SKIPPED_PROFILE_A"
+              : "IMEI_BLACKLIST_SKIPPED_PROFILE_C";
+            recordBlacklist(eventName, true, { profile: baseProfile });
+            mark("imei_check_skipped", true, { reason: `profile_${baseProfile.toLowerCase()}` });
+          } else if (!inputSummary.imeiCode) {
+            recordBlacklist("IMEI_BLACKLIST_SKIPPED_NO_IMEI", true, { profile: baseProfile });
+            mark("imei_check_skipped", true, { reason: "missing_imei" });
+          } else if (!imeiBlacklistProvider) {
+            blacklistResult = unavailableBlacklistEvidence(inputSummary.imeiCode, null, "PROVIDER_UNAVAILABLE");
+          } else {
+            const validation = imeiBlacklistProvider.normalizeAndValidate(inputSummary.imeiCode);
+            if (!validation.valid) {
+              blacklistResult = {
+                ...unavailableBlacklistEvidence(validation.normalizedImei, imeiBlacklistProvider.service, "LOCAL_VALIDATION_FAILED"),
+                status: "INVALID",
+                technicalReason: null,
+              };
+            } else if (!imeiBlacklistProvider.service) {
+              blacklistResult = unavailableBlacklistEvidence(validation.normalizedImei, null, "MISSING_BLACKLIST_SERVICE_ID");
+            } else {
+              mark("imei_check_start", true, { hasImei: true, policy: "BLACKLIST_V1" });
+              let fromCache = false;
+              if (cacheV2ImeiBlacklistRead) {
+                const cached = await readImeiBlacklistEvidence(cacheV2ImeiBlacklistRead, {
+                  traceId,
+                  imeiCode: validation.normalizedImei,
+                });
+                if (cached.state === "HIT") {
+                  fromCache = true;
+                  blacklistResult = cached.result;
+                  recordBlacklist("IMEI_BLACKLIST_CACHE_HIT", true, {
+                    state: "HIT", source: "imei_evidence_cache",
+                    fetchedAt: cached.evidence.fetchedAt, expiresAt: cached.evidence.expiresAt,
+                    rawReference: cached.evidence.rawReference ?? null,
+                    ageMs: Math.max(0, Date.now() - Date.parse(cached.evidence.fetchedAt)),
+                    provider: cached.evidence.provider, service: cached.evidence.service,
+                  }, false);
+                } else {
+                  recordBlacklist("IMEI_BLACKLIST_CACHE_MISS", cached.cacheState !== "BACKEND_ERROR", {
+                    state: cached.cacheState, source: "imei_evidence_cache",
+                  }, false);
+                }
+              }
+              if (!fromCache) {
+                try {
+                  blacklistResult = await imeiBlacklistProvider.check({
+                    imeiCode: validation.normalizedImei,
+                    timeoutMs: config.imeiTimeoutMs,
+                  });
+                  if (!validBlacklistProviderEvidence(
+                    blacklistResult,
+                    validation.normalizedImei,
+                    imeiBlacklistProvider.service
+                  )) {
+                    const rejectedResult = blacklistResult;
+                    blacklistResult = {
+                      ...unavailableBlacklistEvidence(
+                        validation.normalizedImei,
+                        imeiBlacklistProvider.service,
+                        "INVALID_PROVIDER_RESULT"
+                      ),
+                      raw: rejectedResult?.raw ?? rejectedResult,
+                    };
+                  }
+                } catch (error: any) {
+                  blacklistResult = unavailableBlacklistEvidence(
+                    validation.normalizedImei,
+                    imeiBlacklistProvider.service,
+                    error?.message ?? "PROVIDER_EXCEPTION"
+                  );
+                }
+                const currentBlacklistResult = blacklistResult as ImeiBlacklistEvidence;
+                if (hasPersistence && providerRawRepository.saveImeiBlacklist) {
+                  try {
+                    await providerRawRepository.saveImeiBlacklist({
+                      traceId, cpf, imeiCode: validation.normalizedImei, result: currentBlacklistResult,
+                    });
+                  } catch (error) {
+                    console.error("[imei_raw] blacklist insert failed", error);
+                  }
+                }
+                if (currentBlacklistResult.status === "CLEAN" || currentBlacklistResult.status === "BLACKLISTED" || currentBlacklistResult.status === "UNKNOWN") {
+                  imeiBlacklistShadowCandidate = currentBlacklistResult;
+                }
+              }
+              const completedBlacklistResult = blacklistResult as ImeiBlacklistEvidence;
+              mark("imei_check_done", completedBlacklistResult.status !== "UNAVAILABLE", {
+                policy: "BLACKLIST_V1", status: completedBlacklistResult.status,
+                provider: completedBlacklistResult.provider, service: completedBlacklistResult.service,
+                ms: completedBlacklistResult.latencyMs,
+              });
+            }
+          }
+
+          if (blacklistResult) {
+            if (blacklistResult.status === "INVALID") {
+              imeiResultGlobal = {
+                ok: false, provider: "imei_info", ms: 0, reason: "IMEI_INVALID",
+                brandExpected: "UNKNOWN", brandReturned: null, serviceId: null,
+                summary: null, raw: null,
+              };
+            }
+            const eventsByStatus: Record<ImeiBlacklistStatus, CacheV2ShadowEvent["name"]> = {
+              CLEAN: "IMEI_BLACKLIST_CLEAN",
+              BLACKLISTED: "IMEI_BLACKLISTED",
+              UNKNOWN: "IMEI_BLACKLIST_UNKNOWN",
+              UNAVAILABLE: "IMEI_BLACKLIST_UNAVAILABLE",
+              INVALID: "IMEI_BLACKLIST_INVALID",
+            };
+            recordBlacklist(eventsByStatus[blacklistResult.status], blacklistResult.status !== "UNAVAILABLE", {
+              status: blacklistResult.status,
+              provider: blacklistResult.provider,
+              service: blacklistResult.service,
+              reason: blacklistResult.technicalReason ?? undefined,
+            });
+          }
+          evaluation = finalizeBlacklistEvaluation(preEvaluation, blacklistResult?.status ?? null, config.imeiPenalty);
+        } else {
         if (inputSummary.imeiCode) {
           mark("imei_check_start", true, {
             hasImei: true,
@@ -469,7 +663,8 @@ export class AnalyzeAntifraudUseCase {
         } else {
           mark("imei_check_skipped", true, { reason: "missing_imei" });
         }
-        const evaluation = finalizeEvaluation(preEvaluation, imeiResult, config.imeiPenalty);
+        evaluation = finalizeEvaluation(preEvaluation, imeiResult, config.imeiPenalty);
+        }
         decision = evaluation.decision;
         reasons = evaluation.reasons;
         score = evaluation.score;
@@ -480,7 +675,9 @@ export class AnalyzeAntifraudUseCase {
           decision,
           score,
           flags,
-          imeiReason: imeiResult?.reason ?? null,
+          imeiReason: config.imeiBlacklistV1Enabled === true
+            ? blacklistResult?.status ?? null
+            : imeiResult?.reason ?? null,
         });
       }
     } else {
@@ -502,7 +699,7 @@ export class AnalyzeAntifraudUseCase {
     }
 
     let cacheSetMs = 0;
-    if (hasPersistence) {
+    if (hasPersistence && config.imeiBlacklistV1Enabled !== true) {
       const cacheSetStarted = Date.now();
       let expiration: string | null = null;
       try {
@@ -516,8 +713,13 @@ export class AnalyzeAntifraudUseCase {
       mark("cache_set", !!expiration, {
         ttlKind, ttlValue, expiresAt: expiration ?? null, cacheSetMs,
       });
-    } else {
+    } else if (!hasPersistence) {
       mark("cache_set_skipped_no_supabase", true);
+    } else {
+      auditOnlyEvents.push({
+        ts: nowIso(), ms: Date.now() - started,
+        step: "cache_set_skipped_blacklist_policy", ok: true,
+      });
     }
 
     const totalMs = Date.now() - started;
@@ -565,6 +767,12 @@ export class AnalyzeAntifraudUseCase {
         await shadowWriteImei(cacheV2Shadow, {
           traceId,
           ...imeiShadowCandidate,
+        });
+      }
+      if (imeiBlacklistShadowCandidate) {
+        await shadowWriteImeiBlacklist(cacheV2Shadow, {
+          traceId,
+          result: imeiBlacklistShadowCandidate,
         });
       }
       await shadowWriteReplay(cacheV2Shadow, {
