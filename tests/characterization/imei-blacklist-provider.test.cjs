@@ -61,13 +61,28 @@ test("service ID Blacklist não possui default e aceita somente inteiro positivo
 });
 
 test("normalização CLEAN exige quarteto explícito coerente", () => {
-  const fields = normalizeBlacklistFields({
+  const booleanTrue = normalizeBlacklistFields({
     blacklist_status: "Clean", general_list_status: "No",
     blacklist_records: 0, device_is_clean: true,
   });
-  assert.equal(classifyBlacklistStatus(fields), "CLEAN");
-  assert.equal(classifyBlacklistStatus({ ...fields, generalListStatus: null }), "UNKNOWN");
-  assert.equal(classifyBlacklistStatus({ ...fields, deviceIsClean: "true" }), "UNKNOWN");
+  const stringTrue = normalizeBlacklistFields({
+    blacklist_status: "Clean", general_list_status: "No",
+    blacklist_records: 0, device_is_clean: "true",
+  });
+  const booleanFalse = normalizeBlacklistFields({
+    blacklist_status: "Clean", general_list_status: "No",
+    blacklist_records: 0, device_is_clean: false,
+  });
+  const stringFalse = normalizeBlacklistFields({
+    blacklist_status: "Clean", general_list_status: "No",
+    blacklist_records: 0, device_is_clean: "false",
+  });
+  assert.equal(classifyBlacklistStatus(booleanTrue), "CLEAN");
+  assert.equal(classifyBlacklistStatus(stringTrue), "CLEAN");
+  assert.equal(classifyBlacklistStatus(booleanFalse), "UNKNOWN");
+  assert.equal(classifyBlacklistStatus(stringFalse), "UNKNOWN");
+  assert.equal(classifyBlacklistStatus(normalizeBlacklistFields({ device_is_clean: false })), "UNKNOWN");
+  assert.equal(classifyBlacklistStatus({ ...booleanTrue, generalListStatus: null }), "UNKNOWN");
 });
 
 test("BLACKLISTED exige sinal explícito sem contradição", () => {
@@ -76,15 +91,29 @@ test("BLACKLISTED exige sinal explícito sem contradição", () => {
     blacklist_records: 2, device_is_clean: false,
   });
   assert.equal(classifyBlacklistStatus(blacklisted), "BLACKLISTED");
+  assert.equal(classifyBlacklistStatus(normalizeBlacklistFields({
+    blacklist_status: "Blacklisted", device_is_clean: false,
+  })), "BLACKLISTED");
   assert.equal(classifyBlacklistStatus({ ...blacklisted, deviceIsClean: true }), "UNKNOWN");
   assert.equal(classifyBlacklistStatus({ ...blacklisted, blacklistStatusRaw: "Not Blacklisted", blacklistRecords: null, deviceIsClean: null, generalListStatus: null }), "UNKNOWN");
 });
 
-test("campos numéricos e booleanos não sofrem coerção insegura", () => {
+test("device_is_clean aceita apenas boolean ou strings true/false conservadoras", () => {
+  for (const [input, expected] of [
+    [true, true], [false, false], ["true", true], ["false", false],
+    [" TRUE ", true], [" False ", false],
+  ]) {
+    assert.equal(normalizeBlacklistFields({ device_is_clean: input }).deviceIsClean, expected);
+  }
+  for (const input of ["yes", "no", "1", "0", 1, 0, "clean", "unknown", "", null, undefined, {}, []]) {
+    assert.equal(normalizeBlacklistFields({ device_is_clean: input }).deviceIsClean, null);
+  }
+});
+
+test("campos numéricos não sofrem coerção insegura", () => {
   assert.equal(normalizeBlacklistFields({ blacklist_records: "2" }).blacklistRecords, 2);
   assert.equal(normalizeBlacklistFields({ blacklist_records: "2.0" }).blacklistRecords, null);
   assert.equal(normalizeBlacklistFields({ blacklist_records: true }).blacklistRecords, null);
-  assert.equal(normalizeBlacklistFields({ device_is_clean: "false" }).deviceIsClean, null);
 });
 
 test("configuração ou API key ausente retorna UNAVAILABLE sem fetch", async () => {
@@ -154,7 +183,10 @@ test("resposta conhecida é normalizada no contrato factual suportado", async ()
   await withIsolatedEnvironmentAsync({ IMEI_INFO_API_KEY: "synthetic-key" }, async () => {
     const originalFetch = global.fetch;
     global.fetch = async () => response(null, {
-      directJson: { id: 211894175, status: "Done", result: cleanResult() },
+      directJson: { id: 211907431, status: "Done", result: cleanResult({
+        device_is_clean: "true",
+        created_at: "2026-08-28 21:22 UTC",
+      }) },
     });
     try {
       const result = await createImeiBlacklistProvider(777).check({ imeiCode: IMEI, timeoutMs: 20 });
@@ -166,9 +198,9 @@ test("resposta conhecida é normalizada no contrato factual suportado", async ()
       }, {
         status: "CLEAN", model: "Galaxy S20 FE LTE", modelName: "SM-G780G/DS", manufacturer: "Samsung Korea",
         blacklistStatusRaw: "Clean", generalListStatus: "No", blacklistRecords: 0,
-        deviceIsClean: true, providerCreatedAt: "2026-08-28T20:18:00Z",
+        deviceIsClean: true, providerCreatedAt: "2026-08-28 21:22 UTC",
       });
-      assert.equal(result.rawReference, "imei-info-search:211894175");
+      assert.equal(result.rawReference, "imei-info-search:211907431");
     } finally { global.fetch = originalFetch; }
   });
 });

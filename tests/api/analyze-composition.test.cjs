@@ -208,7 +208,7 @@ test("IMEI_BLACKLIST_V1_ENABLED compõe provider e cache Blacklist versionado", 
     assert.equal(dependencies.cacheV2ImeiRead, undefined);
     assert.equal(dependencies.cacheV2ImeiBlacklistRead.service, "blacklist:777");
     assert.equal(dependencies.cacheV2ImeiBlacklistRead.providerContractVersion, "imei-info-blacklist-v1");
-    assert.equal(dependencies.cacheV2ImeiBlacklistRead.normalizerVersion, "imei-blacklist-normalizer-v1");
+    assert.equal(dependencies.cacheV2ImeiBlacklistRead.normalizerVersion, "imei-blacklist-normalizer-v2");
     assert.equal(loaded.calls.useCaseExecute[0].config.imeiBlacklistV1Enabled, true);
   });
 });

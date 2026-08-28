@@ -140,7 +140,7 @@ function fixture(options = {}) {
       imeiProviderContractVersion: "imei-info-v1",
       imeiNormalizerVersion: "imei-normalizer-v2",
       imeiBlacklistProviderContractVersion: "imei-info-blacklist-v1",
-      imeiBlacklistNormalizerVersion: "imei-blacklist-normalizer-v1",
+      imeiBlacklistNormalizerVersion: "imei-blacklist-normalizer-v2",
     },
   } : undefined;
   const dependencies = {
@@ -203,7 +203,7 @@ function fixture(options = {}) {
       provider: "imei_info",
       service: "blacklist:777",
       providerContractVersion: "imei-info-blacklist-v1",
-      normalizerVersion: "imei-blacklist-normalizer-v1",
+      normalizerVersion: "imei-blacklist-normalizer-v2",
       cacheSchemaVersion: "cache-v2-schema-v1",
     } : undefined,
   };
@@ -356,26 +356,26 @@ for (const [fromBlacklist, toBlacklist] of [[false, true], [true, false]]) {
     await run.execute({ ...SYNTHETIC_INPUT, imeiCode: null }, { imeiBlacklistV1Enabled: toBlacklist });
     assert.equal(run.calls.enrichment, before + 1);
     assert.match(run.replay.calls.gets[0].analysisPolicyVersion,
-      new RegExp(`^score-v1\\|imei-${fromBlacklist ? "blacklist-v2" : "legacy-v1"}\\|cfg:[a-f0-9]{64}$`));
+      new RegExp(`^score-v1\\|imei-${fromBlacklist ? "blacklist-v3" : "legacy-v1"}\\|cfg:[a-f0-9]{64}$`));
     assert.match(run.replay.calls.gets[1].analysisPolicyVersion,
-      new RegExp(`^score-v1\\|imei-${toBlacklist ? "blacklist-v2" : "legacy-v1"}\\|cfg:[a-f0-9]{64}$`));
+      new RegExp(`^score-v1\\|imei-${toBlacklist ? "blacklist-v3" : "legacy-v1"}\\|cfg:[a-f0-9]{64}$`));
   });
 }
 
-test("Replay imei-blacklist-v1 produz MISS sob v2 e o mesmo input v2 continua compatível", async () => {
+test("Replay imei-blacklist-v2 produz MISS sob v3 e o mesmo input v3 continua compatível", async () => {
   const run = fixture({ shadow: true });
   const body = { ...SYNTHETIC_INPUT, imeiCode: null };
   const blacklistConfig = { imeiBlacklistV1Enabled: true };
 
   await run.execute(body, blacklistConfig);
-  const v2Entry = run.replay.calls.puts[0];
-  assert.match(v2Entry.analysisPolicyVersion,
-    /^score-v1\|imei-blacklist-v2\|cfg:[a-f0-9]{64}$/);
+  const v3Entry = run.replay.calls.puts[0];
+  assert.match(v3Entry.analysisPolicyVersion,
+    /^score-v1\|imei-blacklist-v3\|cfg:[a-f0-9]{64}$/);
 
   run.replay.entries.clear();
   const oldEntry = {
-    ...v2Entry,
-    analysisPolicyVersion: v2Entry.analysisPolicyVersion.replace("imei-blacklist-v2", "imei-blacklist-v1"),
+    ...v3Entry,
+    analysisPolicyVersion: v3Entry.analysisPolicyVersion.replace("imei-blacklist-v3", "imei-blacklist-v2"),
   };
   run.replay.entries.set(keyOf(oldEntry), oldEntry);
 
@@ -383,7 +383,7 @@ test("Replay imei-blacklist-v1 produz MISS sob v2 e o mesmo input v2 continua co
   assert.equal(run.calls.enrichment, 2);
   assert.equal(run.replay.calls.puts.length, 2);
   assert.match(run.replay.calls.puts[1].analysisPolicyVersion,
-    /^score-v1\|imei-blacklist-v2\|cfg:[a-f0-9]{64}$/);
+    /^score-v1\|imei-blacklist-v3\|cfg:[a-f0-9]{64}$/);
 
   await run.execute(body, blacklistConfig);
   assert.equal(run.calls.enrichment, 2);

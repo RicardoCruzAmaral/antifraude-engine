@@ -19,7 +19,6 @@ export function classifyImeiBlacklistStatus(
   const explicitBlack = status === "BLACKLISTED" ||
     status === "BLACKLIST" ||
     (fields.blacklistRecords !== null && fields.blacklistRecords > 0) ||
-    fields.deviceIsClean === false ||
     general === "YES";
   const contradictoryCleanSignal = status === "CLEAN" ||
     fields.blacklistRecords === 0 ||

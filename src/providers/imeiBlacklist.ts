@@ -26,6 +26,15 @@ function intOrNull(value: unknown): number | null {
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
 }
 
+function booleanOrNull(value: unknown): boolean | null {
+  if (typeof value === "boolean") return value;
+  if (typeof value !== "string") return null;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "true") return true;
+  if (normalized === "false") return false;
+  return null;
+}
+
 function normalizedEnvelopeStatus(value: unknown): string {
   return typeof value === "string"
     ? value.trim().toUpperCase().replace(/[\s-]+/g, "_")
@@ -80,7 +89,7 @@ export function normalizeBlacklistFields(raw: any): SupportedBlacklistResult {
     blacklistStatusRaw: textOrNull(raw?.blacklist_status),
     generalListStatus: textOrNull(raw?.general_list_status),
     blacklistRecords: intOrNull(raw?.blacklist_records),
-    deviceIsClean: typeof raw?.device_is_clean === "boolean" ? raw.device_is_clean : null,
+    deviceIsClean: booleanOrNull(raw?.device_is_clean),
     providerCreatedAt: textOrNull(raw?.created_at),
   };
 }

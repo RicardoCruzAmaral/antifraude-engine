@@ -137,8 +137,8 @@ analysisPolicyVersion = score-v1 | política IMEI | cfg:<SHA-256>
 ```
 
 Exemplos de prefixo são `score-v1|imei-legacy-v1|cfg:` e
-`score-v1|imei-blacklist-v2|cfg:`. O bump interno para `imei-blacklist-v2`
-invalida naturalmente Replays produzidos antes do suporte a `Done` e polling,
+`score-v1|imei-blacklist-v3|cfg:`. O bump interno para `imei-blacklist-v3`
+invalida naturalmente Replays produzidos pelas interpretações Blacklist anteriores,
 sem alterar o `ruleVersion` HTTP público. O hash é o
 `decisionConfigFingerprint`: uma serialização canônica dos valores
 efetivamente resolvidos para pesos de score, penalidade IMEI, modo e falha do
@@ -227,8 +227,10 @@ O provider novo não recebe `modelo_declarado` e usa exclusivamente `IMEI_BLACKL
 
 A evidência normalizada suporta somente: status, model, modelName, manufacturer, blacklistStatusRaw, generalListStatus, blacklistRecords, deviceIsClean e providerCreatedAt. IMEI cru, modelo declarado, marca esperada e brand mismatch não são persistidos em `normalized_evidence`.
 
+`device_is_clean` aceita somente boolean JSON ou as strings `true`/`false`, sem distinção de caixa e com espaços externos ignorados. Números, `1`/`0`, `yes`/`no` e demais valores desconhecidos permanecem `null`.
+
 - `CLEAN`: exige simultaneamente `blacklist_status=Clean`, `general_list_status=No`, `blacklist_records=0` e `device_is_clean=true`.
-- `BLACKLISTED`: exige sinal explícito (`Blacklisted`/`Blacklist`, general list `Yes`, registros acima de zero ou `device_is_clean=false`) sem sinal limpo contraditório.
+- `BLACKLISTED`: exige sinal explícito (`Blacklisted`/`Blacklist`, general list `Yes` ou registros acima de zero) sem sinal limpo contraditório. `device_is_clean=false` isolado permanece `UNKNOWN`.
 - `UNKNOWN`: resposta válida, porém incompleta, desconhecida ou contraditória.
 - `UNAVAILABLE`: configuração/API key ausente, timeout, exception, HTTP não-2xx, JSON inválido, rejeição genérica ou IMEI retornado divergente.
 
@@ -240,7 +242,7 @@ A submissão paga continua sendo feita uma única vez em `GET /api-sync/check/{s
 
 Submissão e polling compartilham um único deadline definido por `IMEI_TIMEOUT_MS`, um único `AbortController` e intervalo curto entre consultas. `Done` é normalizado normalmente para `CLEAN`, `BLACKLISTED` ou `UNKNOWN`. Somente `Rejected` produz `PROVIDER_REJECTED`; `Refunded`, envelope inválido, erro HTTP/JSON e falha de polling continuam técnicos. Se o job permanecer pendente até o deadline, o resultado é `UNAVAILABLE` com motivo interno `PENDING_TIMEOUT`, sem pontos antifraude e sem evidência reutilizável no Cache V2.
 
-Quando disponível, a auditoria preserva uma referência interna no formato `imei-info-search:{id}` e o envelope retornado, sem registrar a API key. Analysis Replay antecede o provider, mas a política interna `imei-blacklist-v2` torna incompatíveis os Replays anteriores que poderiam conter `UNAVAILABLE`; novos resultados técnicos também não são persistidos. Smoke tests controlados ainda devem usar um novo `proposalId` para isolamento operacional (e nunca repetir uma submissão paga apenas para contornar Replay).
+Quando disponível, a auditoria preserva uma referência interna no formato `imei-info-search:{id}` e o envelope retornado, sem registrar a API key. Analysis Replay antecede o provider, mas a política interna `imei-blacklist-v3` torna incompatíveis os Replays das interpretações anteriores; novos resultados técnicos também não são persistidos. Smoke tests controlados ainda devem usar um novo `proposalId` para isolamento operacional (e nunca repetir uma submissão paga apenas para contornar Replay).
 
 ### Cache, versões e decisão
 
@@ -251,11 +253,11 @@ HMAC(IMEI sanitizado)
 + provider imei_info
 + service blacklist:<IMEI_BLACKLIST_SERVICE_ID>
 + imei-info-blacklist-v1
-+ imei-blacklist-normalizer-v1
++ imei-blacklist-normalizer-v2
 + cache-v2-schema-v1
 ```
 
-As versões e o namespace de serviço impedem que evidências Apple/Samsung/Xiaomi sejam interpretadas como Blacklist. Cold miss é esperado. `CLEAN`, `BLACKLISTED` e `UNKNOWN` válidos podem ser cacheados por `IMEI_CACHE_TTL_DAYS`, default independente de 30 dias. `UNAVAILABLE` e falhas técnicas nunca são cacheadas. HIT não grava raw, não renova TTL e não faz shadow rewrite.
+As versões e o namespace de serviço impedem que evidências Apple/Samsung/Xiaomi sejam interpretadas como Blacklist. O normalizer v2 invalida artefatos v1 que tratavam `device_is_clean="true"` como ausente; cold miss é esperado. `CLEAN`, `BLACKLISTED` e `UNKNOWN` válidos podem ser cacheados por `IMEI_CACHE_TTL_DAYS`, default independente de 30 dias. `UNAVAILABLE` e falhas técnicas nunca são cacheadas. HIT não grava raw, não renova TTL e não faz shadow rewrite.
 
 `BLACKLISTED` mantém score e profile base B1/B2, força `DECLINE` e acrescenta `IMEI_BLACKLISTED` aos reasons sem pontos artificiais. `CLEAN`, `UNKNOWN` e `UNAVAILABLE` preservam a decisão da pessoa.
 

@@ -119,7 +119,7 @@ function composeCacheV2(
     imeiProviderContractVersion: "imei-info-v1",
     imeiNormalizerVersion: "imei-normalizer-v2",
     imeiBlacklistProviderContractVersion: "imei-info-blacklist-v1",
-    imeiBlacklistNormalizerVersion: "imei-blacklist-normalizer-v1",
+    imeiBlacklistNormalizerVersion: "imei-blacklist-normalizer-v2",
   };
   const shadow: CacheV2ShadowDependencies | undefined = config.writeEnabled ? {
     analysisReplayRepository: adapters?.analysisReplayRepository ?? null,

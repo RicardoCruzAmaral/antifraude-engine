@@ -57,7 +57,7 @@ function cachedEvidence(status, overrides = {}) {
     },
     fetchedAt: value.fetchedAt, expiresAt: new Date(Date.now() + 60000).toISOString(),
     providerContractVersion: "imei-info-blacklist-v1",
-    normalizerVersion: "imei-blacklist-normalizer-v1",
+    normalizerVersion: "imei-blacklist-normalizer-v2",
     cacheSchemaVersion: "cache-v2-schema-v1", completeness: "COMPLETE",
     rawReference: "blacklist-artifact-1", ...overrides,
   };
@@ -95,7 +95,7 @@ function setup(options = {}) {
     telemetry: { record(event) { calls.telemetry.push(event); } },
     provider: "imei_info", service,
     providerContractVersion: "imei-info-blacklist-v1",
-    normalizerVersion: "imei-blacklist-normalizer-v1",
+    normalizerVersion: "imei-blacklist-normalizer-v2",
     cacheSchemaVersion: "cache-v2-schema-v1",
   };
   const shadow = options.shadow ? {
@@ -110,7 +110,7 @@ function setup(options = {}) {
       techTrailProviderContractVersion: "techtrail-person-v1", techTrailNormalizerVersion: "techtrail-normalizer-v1",
       imeiProviderContractVersion: "imei-info-v1", imeiNormalizerVersion: "imei-normalizer-v2",
       imeiBlacklistProviderContractVersion: "imei-info-blacklist-v1",
-      imeiBlacklistNormalizerVersion: "imei-blacklist-normalizer-v1",
+      imeiBlacklistNormalizerVersion: "imei-blacklist-normalizer-v2",
     },
   } : undefined;
   const useCase = new AnalyzeAntifraudUseCase({
@@ -262,6 +262,19 @@ test("cache HIT UNKNOWN é reutilizado sem fraude nem provider", async () => {
   assert.equal(fixture.calls.blacklist, 0);
   assert.equal(response.body.decision, "APPROVE");
   assert.equal(response.body.score, 15);
+});
+
+test("artifact normalizer-v1 é incompatível com normalizer-v2 e força cold miss", async () => {
+  const oldArtifact = cachedEvidence("UNKNOWN", {
+    normalizerVersion: "imei-blacklist-normalizer-v1",
+  });
+  const fixture = setup({ lookup: { state: "HIT", value: oldArtifact, ageMs: 1000 } });
+  const response = await fixture.execute();
+  assert.equal(fixture.calls.cacheRead[0].normalizerVersion, "imei-blacklist-normalizer-v2");
+  assert.equal(fixture.calls.blacklist, 1);
+  assert.equal(response.body.decision, "APPROVE");
+  const miss = fixture.calls.audit[0].events.find((event) => event.step === "IMEI_BLACKLIST_CACHE_MISS");
+  assert.equal(miss.meta.state, "INCOMPATIBLE");
 });
 
 for (const [state, lookup] of [
