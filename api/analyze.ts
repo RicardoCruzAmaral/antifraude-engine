@@ -28,6 +28,10 @@ import {
   type EnrichmentMode,
 } from "../src/infrastructure/config/envParsers";
 import { resolveDecisionScoreConfig } from "../src/domain/engine";
+import {
+  authenticateAnalyzeRequest,
+  validateAnalyzeRequest,
+} from "../src/infrastructure/http/analyzeRequest";
 
 function envInt(name: string, fallback: number) {
   const value = Number(process.env[name]);
@@ -180,13 +184,39 @@ function composeCacheV2(
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const startedAtMs = Date.now();
   const traceId = crypto.randomUUID();
-  const persistence = createSupabasePersistenceOrNull();
 
   try {
     if (req.method !== "POST") {
+      res.setHeader("Allow", "POST");
       return res.status(405).json({ ok: false, traceId, error: "Method not allowed" });
     }
 
+    const authentication = authenticateAnalyzeRequest(
+      req.headers?.authorization,
+      process.env.ANTIFRAUD_API_KEY
+    );
+    if (authentication.state === "SERVER_MISCONFIGURED") {
+      console.error("[analyze] authentication configuration unavailable", {
+        traceId,
+        stage: "authentication_configuration",
+      });
+      return res.status(503).json({ ok: false, traceId, error: "SERVICE_UNAVAILABLE" });
+    }
+    if (authentication.state === "UNAUTHORIZED") {
+      return res.status(401).json({ ok: false, traceId, error: "UNAUTHORIZED" });
+    }
+
+    const validation = validateAnalyzeRequest(req.body);
+    if (!validation.ok) {
+      return res.status(400).json({
+        ok: false,
+        traceId,
+        error: "INVALID_REQUEST",
+        details: validation.details,
+      });
+    }
+
+    const persistence = createSupabasePersistenceOrNull();
     const analyzeConfig = resolveConfig();
     const blacklistServiceId = resolveBlacklistServiceId(process.env.IMEI_BLACKLIST_SERVICE_ID);
     const blacklistProvider = createImeiBlacklistProvider(blacklistServiceId);
@@ -211,7 +241,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       imeiBlacklistTelemetry: consoleCacheV2ShadowTelemetry,
     });
     const result = await useCase.execute({
-      body: req.body,
+      body: validation.value,
       traceId,
       startedAtMs,
       config: {

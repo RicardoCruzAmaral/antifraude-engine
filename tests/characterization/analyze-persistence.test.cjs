@@ -158,10 +158,17 @@ test("imei_raw recebe resultado e parâmetros sem alterar decisão", async () =>
 });
 
 test("SUPABASE_MISSING_POLICY=fail preserva resposta 500", async () => {
-  await withIsolatedEnvironmentAsync({ SUPABASE_MISSING_POLICY: "fail" }, async () => {
+  await withIsolatedEnvironmentAsync({
+    ANTIFRAUD_API_KEY: "synthetic-characterization-api-key",
+    SUPABASE_MISSING_POLICY: "fail",
+  }, async () => {
     const loaded = loadAnalyzeForCharacterization({ enrichmentResult: enrichmentResult(enrichmentSummary()) });
     const response = { statusCode: null, body: null, status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; } };
-    await withMutedConsoleAsync(() => loaded.exports.default({ method: "POST", body: SYNTHETIC_INPUT }, response));
+    await withMutedConsoleAsync(() => loaded.exports.default({
+      method: "POST",
+      headers: { authorization: "Bearer synthetic-characterization-api-key" },
+      body: SYNTHETIC_INPUT,
+    }, response));
     assert.equal(response.statusCode, 500);
     assert.equal(response.body.error, "FUNCTION_INVOCATION_FAILED");
     assert.equal(loaded.calls.enrichment.length, 0);

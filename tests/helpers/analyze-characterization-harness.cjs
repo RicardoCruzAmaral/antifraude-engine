@@ -4,6 +4,7 @@ const path = require("node:path");
 const ts = require("typescript");
 
 const ANALYZE_PATH = path.resolve(__dirname, "../../api/analyze.ts");
+const HEALTH_PATH = path.resolve(__dirname, "../../api/health.ts");
 const ACTIVE_ENGINE_PATH = path.resolve(
   __dirname,
   "../../src/domain/engine/index.ts"
@@ -59,6 +60,7 @@ const SCORE_CONFIG_PATH = path.resolve(
 
 const ISOLATED_ENV_NAMES = [
   "SUPABASE_URL",
+  "ANTIFRAUD_API_KEY",
   "SUPABASE_SERVICE_ROLE_KEY",
   "SUPABASE_MISSING_POLICY",
   "ENRICHMENT_MODE",
@@ -160,6 +162,10 @@ function loadSupabasePersistenceForCharacterization() {
 
 function loadAnalyzeUseCaseForCharacterization() {
   return withTypeScriptLoader(() => require(ANALYZE_USE_CASE_PATH));
+}
+
+function loadHealthForCharacterization() {
+  return withTypeScriptLoader(() => require(HEALTH_PATH));
 }
 
 function loadCacheV2FoundationForCharacterization() {
@@ -398,6 +404,7 @@ async function withMutedConsoleAsync(callback) {
 
 async function invokeAnalyze({ input, enrichmentResult, imeiResult, persistence, env = {} }) {
   const restoreEnvironment = isolateEnvironment({
+    ANTIFRAUD_API_KEY: "synthetic-characterization-api-key",
     SUPABASE_MISSING_POLICY: "continue",
     ENRICHMENT_MODE: "mock",
     ENRICHMENT_TIMEOUT_MS: "25",
@@ -431,7 +438,11 @@ async function invokeAnalyze({ input, enrichmentResult, imeiResult, persistence,
       },
     };
 
-    await loaded.exports.default({ method: "POST", body: input }, response);
+    await loaded.exports.default({
+      method: "POST",
+      headers: { authorization: "Bearer synthetic-characterization-api-key" },
+      body: input,
+    }, response);
 
     return {
       statusCode: response.statusCode,
@@ -472,6 +483,7 @@ module.exports = {
   loadAnalyzeForCharacterization,
   loadAnalyzeUseCaseForCharacterization,
   loadCacheV2FoundationForCharacterization,
+  loadHealthForCharacterization,
   loadProviderAdaptersForCharacterization,
   loadSupabasePersistenceForCharacterization,
   projectDecision,

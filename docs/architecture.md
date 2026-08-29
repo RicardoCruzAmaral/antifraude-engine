@@ -2,7 +2,17 @@
 
 ## Fluxo de análise
 
-`api/analyze.ts` valida o método HTTP, cria o trace, resolve a configuração e compõe os adapters. O `AnalyzeAntifraudUseCase` normaliza a entrada, consulta o cache e, em caso de miss, executa enrichment, pré-avaliação, IMEI quando aplicável, avaliação final, cache e auditoria. O resultado retorna à API, que preserva o status e o body HTTP.
+`api/analyze.ts` cria o trace e executa, nesta ordem: método HTTP, autenticação/configuração, validação do body e somente então resolução da configuração e composição dos adapters. O `AnalyzeAntifraudUseCase` consulta o cache e, em caso de miss, executa enrichment, pré-avaliação, IMEI quando aplicável, avaliação final, cache e auditoria. O resultado retorna à API, que preserva o status e o body HTTP.
+
+## Segurança da API V1
+
+`POST /api/analyze` exige `Authorization: Bearer <ANTIFRAUD_API_KEY>`. A chave existe apenas no environment, é comparada com `crypto.timingSafeEqual` depois da verificação de comprimento e nunca é registrada ou devolvida. Chave ausente no servidor falha fechada com `503`; credencial ausente, inválida ou malformada retorna `401`. Outros métodos retornam `405` com `Allow: POST`. `/api/health` permanece público e expõe somente seu contrato mínimo atual.
+
+O body de analyze usa schema fechado. Apenas `cpf` é obrigatório; deve ser string com 11 dígitos, com ou sem pontuação padrão, e é encaminhado sem pontuação. O checksum não é validado nesta etapa. São opcionais e aceitam `null`: `cep`, `nome`, `email`, `device`, `imeiCode`, `sessionId`, `proposalId`, `partnerCode`, `salesChannel`, `valor_celular`, `modelo_declarado` e `telefone_contato`. `valor_celular`, quando presente, é number finito e não negativo; string numérica não é aceita. A validade antifraude do IMEI continua no domínio, portanto uma string como `"123"` ainda pode resultar em `IMEI_INVALID`, não em erro HTTP.
+
+Limites máximos de strings, após trim: `cep` 16, `nome` 200, `email` 254, `imeiCode` 32, `sessionId`/`proposalId` 128, `partnerCode`/`salesChannel` 64, `modelo_declarado` 200 e `telefone_contato` 32 caracteres. `device` também é fechado: strings `ip` 64, `visitorId`/`requestId` 256, `os`/`osVersion`/`browserName`/`fingerprintProvider` 128, `gpu` 512 e `collectedAt` 64; `cores` é inteiro finito não negativo, `isMobile`/`incognito` são boolean e as dimensões de tela são numbers finitos não negativos. Campos escalares de device aceitam `null`.
+
+Rejeições `400`, `401`, `405` e `503` acontecem antes de Supabase, caches, Replay, providers e engine. Erros `400` usam `INVALID_REQUEST` e detalhes apenas de campo/regra, sem ecoar valores do request.
 
 ## Responsabilidades por camada
 
