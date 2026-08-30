@@ -428,6 +428,11 @@ async function invokeAnalyze({ input, enrichmentResult, imeiResult, persistence,
     const response = {
       statusCode: null,
       body: null,
+      headers: {},
+      setHeader(name, value) {
+        this.headers[String(name).toLowerCase()] = value;
+        return this;
+      },
       status(code) {
         this.statusCode = code;
         return this;
@@ -447,6 +452,7 @@ async function invokeAnalyze({ input, enrichmentResult, imeiResult, persistence,
     return {
       statusCode: response.statusCode,
       body: response.body,
+      headers: response.headers,
       calls: loaded.calls,
       networkCalls,
     };

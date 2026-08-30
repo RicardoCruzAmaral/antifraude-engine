@@ -356,38 +356,67 @@ for (const [fromBlacklist, toBlacklist] of [[false, true], [true, false]]) {
     await run.execute({ ...SYNTHETIC_INPUT, imeiCode: null }, { imeiBlacklistV1Enabled: toBlacklist });
     assert.equal(run.calls.enrichment, before + 1);
     assert.match(run.replay.calls.gets[0].analysisPolicyVersion,
-      new RegExp(`^score-v1\\|imei-${fromBlacklist ? "blacklist-v3" : "legacy-v1"}\\|cfg:[a-f0-9]{64}$`));
+      new RegExp(`^score-v1\\|imei-${fromBlacklist ? "blacklist-v4" : "legacy-v2"}\\|cfg:[a-f0-9]{64}$`));
     assert.match(run.replay.calls.gets[1].analysisPolicyVersion,
-      new RegExp(`^score-v1\\|imei-${toBlacklist ? "blacklist-v3" : "legacy-v1"}\\|cfg:[a-f0-9]{64}$`));
+      new RegExp(`^score-v1\\|imei-${toBlacklist ? "blacklist-v4" : "legacy-v2"}\\|cfg:[a-f0-9]{64}$`));
   });
 }
 
-test("Replay imei-blacklist-v2 produz MISS sob v3 e o mesmo input v3 continua compatível", async () => {
-  const run = fixture({ shadow: true });
-  const body = { ...SYNTHETIC_INPUT, imeiCode: null };
-  const blacklistConfig = { imeiBlacklistV1Enabled: true };
+for (const { label, enabled, oldVersion, currentVersion } of [
+  { label: "legado", enabled: false, oldVersion: "imei-legacy-v1", currentVersion: "imei-legacy-v2" },
+  { label: "Blacklist", enabled: true, oldVersion: "imei-blacklist-v3", currentVersion: "imei-blacklist-v4" },
+]) {
+  test(`Replay ${label} anterior produz MISS após o bump de privacidade e a versão atual continua compatível`, async () => {
+    const run = fixture({ shadow: true });
+    const body = { ...SYNTHETIC_INPUT, imeiCode: null };
+    const config = { imeiBlacklistV1Enabled: enabled };
 
-  await run.execute(body, blacklistConfig);
-  const v3Entry = run.replay.calls.puts[0];
-  assert.match(v3Entry.analysisPolicyVersion,
-    /^score-v1\|imei-blacklist-v3\|cfg:[a-f0-9]{64}$/);
+    await run.execute(body, config);
+    const currentEntry = run.replay.calls.puts[0];
+    assert.match(currentEntry.analysisPolicyVersion,
+      new RegExp(`^score-v1\\|${currentVersion}\\|cfg:[a-f0-9]{64}$`));
 
-  run.replay.entries.clear();
-  const oldEntry = {
-    ...v3Entry,
-    analysisPolicyVersion: v3Entry.analysisPolicyVersion.replace("imei-blacklist-v3", "imei-blacklist-v2"),
-  };
-  run.replay.entries.set(keyOf(oldEntry), oldEntry);
+    run.replay.entries.clear();
+    const oldEntry = {
+      ...currentEntry,
+      analysisPolicyVersion: currentEntry.analysisPolicyVersion.replace(currentVersion, oldVersion),
+    };
+    run.replay.entries.set(keyOf(oldEntry), oldEntry);
 
-  await run.execute(body, blacklistConfig);
-  assert.equal(run.calls.enrichment, 2);
-  assert.equal(run.replay.calls.puts.length, 2);
-  assert.match(run.replay.calls.puts[1].analysisPolicyVersion,
-    /^score-v1\|imei-blacklist-v3\|cfg:[a-f0-9]{64}$/);
+    await run.execute(body, config);
+    assert.equal(run.calls.enrichment, 2);
+    assert.equal(run.replay.calls.puts.length, 2);
+    assert.match(run.replay.calls.puts[1].analysisPolicyVersion,
+      new RegExp(`^score-v1\\|${currentVersion}\\|cfg:[a-f0-9]{64}$`));
 
-  await run.execute(body, blacklistConfig);
-  assert.equal(run.calls.enrichment, 2);
-  assert.equal(run.replay.calls.puts.length, 2);
+    await run.execute(body, config);
+    assert.equal(run.calls.enrichment, 2);
+    assert.equal(run.replay.calls.puts.length, 2);
+  });
+}
+
+test("Replay novo preserva somente hasImeiCode e não reintroduz IMEI bruto", async () => {
+  const rawImei = "490154203237518";
+  const run = fixture({
+    shadow: true,
+    imeiResult: {
+      ...imeiResult("IMEI_OK"),
+      summary: { model_name: "Synthetic Phone", imei_checked: rawImei },
+    },
+  });
+  const first = await run.execute({ ...SYNTHETIC_INPUT, imeiCode: rawImei });
+  const storedBody = run.replay.calls.puts[0].result.body;
+  const storedEvent = storedBody.events.find((event) => event.step === "input_summary_built");
+
+  assert.deepEqual(storedEvent.meta, { hasImeiCode: true });
+  assert.equal(JSON.stringify(first.body).includes(rawImei), false);
+  assert.equal(JSON.stringify(storedBody).includes(rawImei), false);
+
+  const replayed = await run.execute({ ...SYNTHETIC_INPUT, imeiCode: rawImei });
+  assert.strictEqual(replayed.body, storedBody);
+  assert.equal(JSON.stringify(replayed.body).includes(rawImei), false);
+  assert.equal(run.calls.enrichment, 1);
+  assert.equal(run.calls.imei, 1);
 });
 
 for (const [label, technicalReason] of [

@@ -55,9 +55,7 @@ export function preEvaluate(
     };
   }
 
-  console.log("🟦 about to call computeScoreLocal");
   const scoreResult = computeScoreLocal(enrichResult, input, scoreConfig);
-  console.log("🟩 returned from computeScoreLocal", scoreResult);
 
   const baseScore = Number.isFinite(scoreResult?.score)
     ? scoreResult.score

@@ -163,7 +163,14 @@ test("SUPABASE_MISSING_POLICY=fail preserva resposta 500", async () => {
     SUPABASE_MISSING_POLICY: "fail",
   }, async () => {
     const loaded = loadAnalyzeForCharacterization({ enrichmentResult: enrichmentResult(enrichmentSummary()) });
-    const response = { statusCode: null, body: null, status(code) { this.statusCode = code; return this; }, json(body) { this.body = body; } };
+    const response = {
+      statusCode: null,
+      body: null,
+      headers: {},
+      setHeader(name, value) { this.headers[String(name).toLowerCase()] = value; return this; },
+      status(code) { this.statusCode = code; return this; },
+      json(body) { this.body = body; },
+    };
     await withMutedConsoleAsync(() => loaded.exports.default({
       method: "POST",
       headers: { authorization: "Bearer synthetic-characterization-api-key" },

@@ -12,14 +12,10 @@ export function computeScoreLocal(
   input: InputSummary,
   config: DecisionScoreConfig = resolveDecisionScoreConfig()
 ): ScoreResult {
-  console.log("✅ DEBUG computeScoreLocal ENTER");
-
   const breakdown: ScoreBreakdownItem[] = [];
   const motivos: string[] = Array.isArray(enrichResult?.summary?.motivos)
     ? enrichResult.summary.motivos
     : [];
-
-  console.log("motivos:", motivos);
 
   // Divergências cadastrais (motivos)
   const P_EMAIL = config.scoreEmailDivergente;

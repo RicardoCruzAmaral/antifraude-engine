@@ -78,8 +78,8 @@ function addDays(iso: string, days: number) {
 function emit(dependencies: CacheV2ShadowDependencies, event: CacheV2ShadowEvent) {
   try {
     dependencies.telemetry.record(event);
-  } catch (error) {
-    console.error("[cache-v2-shadow] telemetry failed", error);
+  } catch {
+    console.error("[cache-v2-shadow] telemetry failed");
   }
 }
 
@@ -109,8 +109,8 @@ export async function shadowWriteTechTrail(
       rawReference: null,
     });
     emit(dependencies, { name: "cache_v2_techtrail_write_success", traceId: input.traceId });
-  } catch (error) {
-    console.error("[cache-v2-shadow] TechTrail write failed", error);
+  } catch {
+    console.error("[cache-v2-shadow] TechTrail write failed", { traceId: input.traceId, reason: "WRITE_FAILED" });
     emit(dependencies, { name: "cache_v2_techtrail_write_error", traceId: input.traceId, reason: "WRITE_FAILED" });
   }
 }
@@ -152,8 +152,8 @@ export async function shadowWriteImei(
       rawReference: null,
     });
     emit(dependencies, { name: "cache_v2_imei_write_success", traceId: input.traceId });
-  } catch (error) {
-    console.error("[cache-v2-shadow] IMEI write failed", error);
+  } catch {
+    console.error("[cache-v2-shadow] IMEI write failed", { traceId: input.traceId, reason: "WRITE_FAILED" });
     emit(dependencies, { name: "cache_v2_imei_write_error", traceId: input.traceId, reason: "WRITE_FAILED" });
   }
 }
@@ -212,8 +212,8 @@ export async function shadowWriteImeiBlacklist(
       rawReference: result.rawReference,
     });
     emit(dependencies, { name: "cache_v2_imei_write_success", traceId: input.traceId });
-  } catch (error) {
-    console.error("[cache-v2-shadow] IMEI Blacklist write failed", error);
+  } catch {
+    console.error("[cache-v2-shadow] IMEI Blacklist write failed", { traceId: input.traceId, reason: "WRITE_FAILED" });
     emit(dependencies, { name: "cache_v2_imei_write_error", traceId: input.traceId, reason: "WRITE_FAILED" });
   }
 }
@@ -257,8 +257,8 @@ export async function shadowWriteReplay(
       expiresAt: addDays(input.createdAt, dependencies.replayTtlDays),
     });
     emit(dependencies, { name: "cache_v2_replay_write_success", traceId: input.traceId });
-  } catch (error) {
-    console.error("[cache-v2-shadow] replay write failed", error);
+  } catch {
+    console.error("[cache-v2-shadow] replay write failed", { traceId: input.traceId, reason: "WRITE_FAILED" });
     emit(dependencies, { name: "cache_v2_replay_write_error", traceId: input.traceId, reason: "WRITE_FAILED" });
   }
 }

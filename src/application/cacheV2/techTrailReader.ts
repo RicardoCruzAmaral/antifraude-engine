@@ -25,8 +25,8 @@ function record(
 ) {
   try {
     dependencies.telemetry.record(event);
-  } catch (error) {
-    console.error("[cache-v2-read] telemetry failed", error);
+  } catch {
+    console.error("[cache-v2-read] telemetry failed");
   }
 }
 
@@ -102,8 +102,11 @@ export async function readTechTrailEvidence(
           : undefined,
     });
     return { state: "FALLBACK", cacheState: lookup.state };
-  } catch (error) {
-    console.error("[cache-v2-read] TechTrail lookup failed", error);
+  } catch {
+    console.error("[cache-v2-read] TechTrail lookup failed", {
+      traceId: input.traceId,
+      reason: "LOOKUP_FAILED",
+    });
     record(dependencies, {
       name: "cache_v2_techtrail_read_backend_error",
       traceId: input.traceId,

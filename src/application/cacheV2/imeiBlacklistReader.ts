@@ -28,7 +28,7 @@ export type ImeiBlacklistReadResult =
 
 function record(dependencies: ImeiBlacklistReadDependencies, event: Parameters<CacheV2ShadowTelemetry["record"]>[0]) {
   try { dependencies.telemetry.record(event); }
-  catch (error) { console.error("[cache-v2-read] telemetry failed", error); }
+  catch { console.error("[cache-v2-read] telemetry failed"); }
 }
 
 function optionalString(value: unknown) {
@@ -137,8 +137,8 @@ export async function readImeiBlacklistEvidence(
       details: { state: lookup.state },
     });
     return { state: "FALLBACK", cacheState: lookup.state };
-  } catch (error) {
-    console.error("[cache-v2-read] IMEI Blacklist lookup failed", error);
+  } catch {
+    console.error("[cache-v2-read] IMEI Blacklist lookup failed", { traceId: input.traceId, reason: "LOOKUP_FAILED" });
     record(dependencies, { name: "IMEI_BLACKLIST_CACHE_MISS", traceId: input.traceId, reason: "LOOKUP_FAILED", details: { state: "BACKEND_ERROR" } });
     return { state: "FALLBACK", cacheState: "BACKEND_ERROR" };
   }

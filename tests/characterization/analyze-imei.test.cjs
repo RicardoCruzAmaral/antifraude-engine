@@ -14,6 +14,34 @@ const expectedBaseBreakdown = [
   { rule: "PROB_ALTISSIMA", points: 0 },
 ];
 
+test("events públicos expõem somente presença categórica do IMEI", async () => {
+  const rawImei = "000000000000000";
+  const providerResult = {
+    ...imeiResult("IMEI_OK"),
+    summary: {
+      brand: "SAMSUNG",
+      model_name: "Synthetic Phone",
+      imei_checked: rawImei,
+    },
+  };
+  const result = await invokeAnalyze({
+    input: { ...SYNTHETIC_INPUT, imeiCode: rawImei },
+    enrichmentResult: enrichmentResult(enrichmentSummary()),
+    imeiResult: providerResult,
+  });
+
+  const inputEvent = result.body.events.find(
+    (event) => event.step === "input_summary_built"
+  );
+  assert.deepEqual(inputEvent.meta, { hasImeiCode: true });
+  assert.equal(JSON.stringify(result.body).includes(rawImei), false);
+  assert.equal(Object.hasOwn(result.body.imei.summary, "imei_checked"), false);
+  assert.equal(result.body.imei.summary.model_name, "Synthetic Phone");
+  assert.equal(result.body.imei.reason, "IMEI_OK");
+  assert.equal(result.body.decision, "APPROVE");
+  assert.equal(result.calls.imei.length, 1);
+});
+
 for (const reason of [
   "IMEI_OK",
   "IMEI_INVALID",

@@ -112,7 +112,49 @@ test("exception fatal do use case preserva resposta HTTP 500", async () => {
     await withMutedConsoleAsync(() => loaded.exports.default(authorizedPost(), res));
     assert.equal(res.statusCode, 500);
     assert.equal(res.body.error, "FUNCTION_INVOCATION_FAILED");
-    assert.equal(res.body.details, "fatal-test");
+    assert.equal("details" in res.body, false);
+  });
+});
+
+test("X-Request-Id identifica cada request HTTP sem substituir traceId reutilizado no body", async () => {
+  await withIsolatedEnvironmentAsync({}, async () => {
+    const replayTraceId = "original-analysis-trace";
+    const loaded = loadAnalyzeForCharacterization({
+      mockUseCase: true,
+      useCaseResult: { statusCode: 200, body: { ok: true, traceId: replayTraceId } },
+    });
+    const first = response();
+    const second = response();
+
+    await loaded.exports.default(authorizedPost(), first);
+    await loaded.exports.default(authorizedPost(), second);
+
+    assert.match(first.headers["x-request-id"], /^[0-9a-f-]{36}$/i);
+    assert.match(second.headers["x-request-id"], /^[0-9a-f-]{36}$/i);
+    assert.notEqual(first.headers["x-request-id"], second.headers["x-request-id"]);
+    assert.equal(first.body.traceId, replayTraceId);
+    assert.equal(second.body.traceId, replayTraceId);
+  });
+});
+
+test("respostas de erro não ecoam Authorization, API key ou body", async () => {
+  await withIsolatedEnvironmentAsync({}, async () => {
+    const secret = TEST_API_KEY;
+    const rawImei = "490154203237518";
+    const loaded = loadAnalyzeForCharacterization({ mockUseCase: true });
+    const unauthorized = response();
+    await loaded.exports.default(authorizedPost({ ...VALID_BODY, imeiCode: rawImei }, "Bearer wrong-key"), unauthorized);
+
+    const serializedUnauthorized = JSON.stringify(unauthorized.body);
+    assert.equal(serializedUnauthorized.includes("wrong-key"), false);
+    assert.equal(serializedUnauthorized.includes(secret), false);
+    assert.equal(serializedUnauthorized.includes(rawImei), false);
+
+    const invalid = response();
+    await loaded.exports.default(authorizedPost({ ...VALID_BODY, imeiCode: rawImei, unexpected: secret }), invalid);
+    const serializedInvalid = JSON.stringify(invalid.body);
+    assert.equal(serializedInvalid.includes(secret), false);
+    assert.equal(serializedInvalid.includes(rawImei), false);
   });
 });
 

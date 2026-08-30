@@ -51,8 +51,8 @@ export function createSupabasePersistence(client: SupabaseLike): SupabasePersist
           ruleVersion: data.rule_version,
           expiresAt: data.expires_at,
         };
-      } catch (err) {
-        console.error("[cacheGet] failed", err);
+      } catch {
+        console.error("[cacheGet] failed", { reason: "BACKEND_ERROR" });
         return null;
       }
     },
@@ -74,8 +74,8 @@ export function createSupabasePersistence(client: SupabaseLike): SupabasePersist
         );
         if (error) throw error;
         return expiration;
-      } catch (err) {
-        console.error("[cacheUpsert] failed", err);
+      } catch {
+        console.error("[cacheUpsert] failed", { reason: "BACKEND_ERROR" });
         return null;
       }
     },
@@ -99,8 +99,8 @@ export function createSupabasePersistence(client: SupabaseLike): SupabasePersist
           created_at: nowIso(),
         });
         if (error) throw error;
-      } catch (err) {
-        console.error("[decision_log] insert failed", { trace_id: row.traceId, err });
+      } catch {
+        console.error("[decision_log] insert failed", { trace_id: row.traceId, reason: "BACKEND_ERROR" });
       }
     },
   };
@@ -122,8 +122,8 @@ export function createSupabasePersistence(client: SupabaseLike): SupabasePersist
           created_at: nowIso(),
         });
         if (error) throw error;
-      } catch (err) {
-        console.error("[enrichment_raw] insert failed", { trace_id: row.traceId, err });
+      } catch {
+        console.error("[enrichment_raw] insert failed", { trace_id: row.traceId, reason: "BACKEND_ERROR" });
       }
     },
 
@@ -150,8 +150,8 @@ export function createSupabasePersistence(client: SupabaseLike): SupabasePersist
           response_json: row.result.raw ?? null,
           created_at: nowIso(),
         });
-      } catch (err) {
-        console.error("[imei_raw] insert failed", err);
+      } catch {
+        console.error("[imei_raw] insert failed", { trace_id: row.traceId, reason: "BACKEND_ERROR" });
       }
     },
 
@@ -184,8 +184,8 @@ export function createSupabasePersistence(client: SupabaseLike): SupabasePersist
           response_json: row.result.raw ?? null,
           created_at: nowIso(),
         });
-      } catch (err) {
-        console.error("[imei_raw] blacklist insert failed", err);
+      } catch {
+        console.error("[imei_raw] blacklist insert failed", { trace_id: row.traceId, reason: "BACKEND_ERROR" });
       }
     },
   };

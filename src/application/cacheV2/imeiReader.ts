@@ -30,7 +30,7 @@ export type ImeiReadResult =
 
 function record(dependencies: ImeiReadDependencies, event: Parameters<CacheV2ShadowTelemetry["record"]>[0]) {
   try { dependencies.telemetry.record(event); }
-  catch (error) { console.error("[cache-v2-read] telemetry failed", error); }
+  catch { console.error("[cache-v2-read] telemetry failed"); }
 }
 
 function factualResult(value: unknown, context: ImeiLookupContext): NormalizedImeiResult | null {
@@ -104,8 +104,8 @@ export async function readImeiEvidence(
       reason: lookup.state === "INCOMPATIBLE" ? lookup.reason : lookup.state === "BACKEND_ERROR" ? lookup.errorCode : undefined,
     });
     return { state: "FALLBACK", cacheState: lookup.state };
-  } catch (error) {
-    console.error("[cache-v2-read] IMEI lookup failed", error);
+  } catch {
+    console.error("[cache-v2-read] IMEI lookup failed", { traceId: input.traceId, reason: "LOOKUP_FAILED" });
     record(dependencies, { name: "cache_v2_imei_read_backend_error", traceId: input.traceId, reason: "LOOKUP_FAILED" });
     return { state: "FALLBACK", cacheState: "BACKEND_ERROR" };
   }

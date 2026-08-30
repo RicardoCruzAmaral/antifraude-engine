@@ -173,6 +173,15 @@ export function buildInputSummary(body: any): InputSummary {
   };
 }
 
+function buildPublicImeiSummary(summary: any) {
+  if (!summary || typeof summary !== "object" || Array.isArray(summary)) {
+    return summary ?? null;
+  }
+  const publicSummary = { ...summary };
+  delete publicSummary.imei_checked;
+  return publicSummary;
+}
+
 function normalizeEnrichmentInput(body: any, traceId: string): EnrichmentProviderInput {
   return {
     traceId: String(traceId),
@@ -225,11 +234,10 @@ export class AnalyzeAntifraudUseCase {
     const recordBlacklist = (name: CacheV2ShadowEvent["name"], ok: boolean, meta?: any, emitTelemetry = true) => {
       auditOnlyEvents.push({ ts: nowIso(), ms: Date.now() - started, step: name, ok, meta: meta ?? undefined });
       try { if (emitTelemetry) imeiBlacklistTelemetry?.record({ name, traceId, reason: meta?.reason, details: meta }); }
-      catch (error) { console.error("[imei-blacklist] telemetry failed", error); }
+      catch { console.error("[imei-blacklist] telemetry failed"); }
     };
 
     mark("request_received", true);
-    console.log("ðŸ”¥ ANALYZE HIT", new Date().toISOString());
 
     const inputSummary = buildInputSummary(body);
     const cpf = inputSummary.cpf;
@@ -252,7 +260,6 @@ export class AnalyzeAntifraudUseCase {
     mark("fingerprint_snapshot", true, { hasFingerprint: !!fingerprintSnapshot });
     mark("input_summary_built", true, {
       hasImeiCode: !!inputSummary.imeiCode,
-      imeiCode: inputSummary.imeiCode ?? null,
     });
 
     if (!cpf) {
@@ -306,8 +313,8 @@ export class AnalyzeAntifraudUseCase {
       const cacheGetStarted = Date.now();
       try {
         hit = await decisionCache.get(cpf);
-      } catch (err) {
-        console.error("[cacheGet] failed", err);
+      } catch {
+        console.error("[cacheGet] failed", { traceId, reason: "BACKEND_ERROR" });
       }
       cacheGetMs = Date.now() - cacheGetStarted;
       mark("cache_get", true, { hit: !!hit, cacheGetMs });
@@ -343,8 +350,8 @@ export class AnalyzeAntifraudUseCase {
             score: hit.score, reasons: hit.reasons, ruleVersion: hit.ruleVersion,
             inputSummary, events: eventsForAudit(), latencyMs: totalMs,
           });
-        } catch (err) {
-          console.error("[decision_log] insert failed", { trace_id: traceId, err });
+        } catch {
+          console.error("[decision_log] insert failed", { trace_id: traceId, reason: "BACKEND_ERROR" });
         }
       }
       if (cacheV2Shadow) {
@@ -452,8 +459,8 @@ export class AnalyzeAntifraudUseCase {
           responseJson: enrichResult?.raw ?? null,
           error: enrichResult?.ok ? null : enrichResult?.error ?? { msg: "ENRICHMENT_FAILED" },
         });
-      } catch (err) {
-        console.error("[enrichment_raw] insert failed", { trace_id: traceId, err });
+      } catch {
+        console.error("[enrichment_raw] insert failed", { trace_id: traceId, reason: "BACKEND_ERROR" });
       }
       mark("enrichment_raw_saved", true);
     } else if (!enrichmentFromV2) {
@@ -589,8 +596,8 @@ export class AnalyzeAntifraudUseCase {
                     await providerRawRepository.saveImeiBlacklist({
                       traceId, cpf, imeiCode: validation.normalizedImei, result: currentBlacklistResult,
                     });
-                  } catch (error) {
-                    console.error("[imei_raw] blacklist insert failed", error);
+                  } catch {
+                    console.error("[imei_raw] blacklist insert failed", { traceId, reason: "BACKEND_ERROR" });
                   }
                 }
                 if (currentBlacklistResult.status === "CLEAN" || currentBlacklistResult.status === "BLACKLISTED" || currentBlacklistResult.status === "UNKNOWN") {
@@ -682,8 +689,8 @@ export class AnalyzeAntifraudUseCase {
                 modeloDeclarado: inputSummary.modelo_declarado ?? null,
                 result: currentImeiResult,
               });
-            } catch (err) {
-              console.error("[imei_raw] insert failed", err);
+            } catch {
+              console.error("[imei_raw] insert failed", { traceId, reason: "BACKEND_ERROR" });
             }
           }
           if (!imeiFromV2) {
@@ -700,7 +707,7 @@ export class AnalyzeAntifraudUseCase {
             brandExpected: currentImeiResult.brandExpected ?? null,
             brandReturned: currentImeiResult.brandReturned ?? null,
             serviceId: currentImeiResult.serviceId ?? null,
-            imeiSummary: currentImeiResult.summary ?? null,
+            imeiSummary: buildPublicImeiSummary(currentImeiResult.summary),
           });
         } else {
           mark("imei_check_skipped", true, { reason: "missing_imei" });
@@ -748,8 +755,8 @@ export class AnalyzeAntifraudUseCase {
         expiration = await decisionCache.set({
           cpf, decision, score, reasons, ruleVersion, ttlKind, ttlValue, updatedAtIso: nowIso(),
         });
-      } catch (err) {
-        console.error("[cacheUpsert] failed", err);
+      } catch {
+        console.error("[cacheUpsert] failed", { traceId, reason: "BACKEND_ERROR" });
       }
       cacheSetMs = Date.now() - cacheSetStarted;
       mark("cache_set", !!expiration, {
@@ -784,7 +791,7 @@ export class AnalyzeAntifraudUseCase {
             reason: imeiResultGlobal.reason,
             brandExpected: imeiResultGlobal.brandExpected ?? null,
             brandReturned: imeiResultGlobal.brandReturned ?? null,
-            summary: imeiResultGlobal.summary ?? null,
+            summary: buildPublicImeiSummary(imeiResultGlobal.summary),
           }
         : null,
     };
@@ -794,8 +801,8 @@ export class AnalyzeAntifraudUseCase {
           traceId, cpf, source: "engine", cacheHit: false, decision, score, reasons,
           ruleVersion, inputSummary, events: eventsForAudit(), latencyMs: totalMs,
         });
-      } catch (err) {
-        console.error("[decision_log] insert failed", { trace_id: traceId, err });
+      } catch {
+        console.error("[decision_log] insert failed", { trace_id: traceId, reason: "BACKEND_ERROR" });
       }
     }
     if (cacheV2Shadow) {

@@ -8,6 +8,8 @@
 
 `POST /api/analyze` exige `Authorization: Bearer <ANTIFRAUD_API_KEY>`. A chave existe apenas no environment, é comparada com `crypto.timingSafeEqual` depois da verificação de comprimento e nunca é registrada ou devolvida. Chave ausente no servidor falha fechada com `503`; credencial ausente, inválida ou malformada retorna `401`. Outros métodos retornam `405` com `Allow: POST`. `/api/health` permanece público e expõe somente seu contrato mínimo atual.
 
+Cada chamada HTTP de `/api/analyze` recebe um UUID novo no header `X-Request-Id`. O `traceId` do body identifica a análise; em um Analysis Replay HIT ele continua sendo o trace original armazenado, enquanto `X-Request-Id` identifica a request atual.
+
 O body de analyze usa schema fechado. Apenas `cpf` é obrigatório; deve ser string com 11 dígitos, com ou sem pontuação padrão, e é encaminhado sem pontuação. O checksum não é validado nesta etapa. São opcionais e aceitam `null`: `cep`, `nome`, `email`, `device`, `imeiCode`, `sessionId`, `proposalId`, `partnerCode`, `salesChannel`, `valor_celular`, `modelo_declarado` e `telefone_contato`. `valor_celular`, quando presente, é number finito e não negativo; string numérica não é aceita. A validade antifraude do IMEI continua no domínio, portanto uma string como `"123"` ainda pode resultar em `IMEI_INVALID`, não em erro HTTP.
 
 Limites máximos de strings, após trim: `cep` 16, `nome` 200, `email` 254, `imeiCode` 32, `sessionId`/`proposalId` 128, `partnerCode`/`salesChannel` 64, `modelo_declarado` 200 e `telefone_contato` 32 caracteres. `device` também é fechado: strings `ip` 64, `visitorId`/`requestId` 256, `os`/`osVersion`/`browserName`/`fingerprintProvider` 128, `gpu` 512 e `collectedAt` 64; `cores` é inteiro finito não negativo, `isMobile`/`incognito` são boolean e as dimensões de tela são numbers finitos não negativos. Campos escalares de device aceitam `null`.
@@ -22,6 +24,8 @@ Rejeições `400`, `401`, `405` e `503` acontecem antes de Supabase, caches, Rep
 - `infrastructure`: implementação dos ports para TechTrail, IMEI.info e Supabase.
 
 Os principais ports são `EnrichmentProvider`, `ImeiProvider`, `DecisionCache`, `DecisionAuditRepository` e `ProviderRawRepository`.
+
+Na tabela histórica `decision_log`, a coluna `cache_hit` representa exclusivamente um HIT do `decision_cache` V1. HITs de TechTrail Evidence, IMEI Evidence e Analysis Replay são estados próprios da telemetria/eventos internos do Cache V2; a coluna não foi renomeada nem ampliada.
 
 ## Fonte única das regras
 
@@ -78,6 +82,8 @@ Ficam excluídos: `sessionId`, `collectedAt`, request IDs técnicos do fingerpri
 ### Raw e segurança
 
 Os caches V2 armazenam somente a evidência normalizada necessária para reutilização e uma `rawReference` opcional. O payload original permanece nos repositories raw de auditoria.
+
+O evento HTTP público `input_summary_built` expõe somente `{ hasImeiCode: boolean }`; o IMEI bruto não é devolvido nos events. A serialização pública do resumo IMEI legado também omite `imei_checked`, sem alterar o resultado interno do provider ou a evidência factual. Logs operacionais registram categorias, trace técnico, estados e durações, sem body, credenciais ou payload raw de provider.
 
 CPF e IMEI nunca são chaves cruas nas tabelas V2: são tokenizados por HMAC-SHA-256 com `EVIDENCE_LOOKUP_HMAC_KEY`. O segredo deve ser separado das credenciais dos providers, nunca logado e rotacionado por procedimento compatível com invalidação/reindexação. As tabelas têm RLS habilitado e não concedem acesso direto a `anon` ou `authenticated`. Retenção e descarte ainda precisam de política formal.
 
@@ -146,10 +152,12 @@ O identificador interno de comportamento tem o formato:
 analysisPolicyVersion = score-v1 | política IMEI | cfg:<SHA-256>
 ```
 
-Exemplos de prefixo são `score-v1|imei-legacy-v1|cfg:` e
-`score-v1|imei-blacklist-v3|cfg:`. O bump interno para `imei-blacklist-v3`
-invalida naturalmente Replays produzidos pelas interpretações Blacklist anteriores,
-sem alterar o `ruleVersion` HTTP público. O hash é o
+Os prefixos atuais são `score-v1|imei-legacy-v2|cfg:` e
+`score-v1|imei-blacklist-v4|cfg:`. Ambos avançaram exclusivamente para
+invalidar Replays cujo response persistido podia conter o IMEI bruto em
+`input_summary_built.meta.imeiCode`. A mudança afeta somente a compatibilidade
+do Analysis Replay; não altera Cache V2 de evidência, normalizers nem o
+`ruleVersion` HTTP público. O hash é o
 `decisionConfigFingerprint`: uma serialização canônica dos valores
 efetivamente resolvidos para pesos de score, penalidade IMEI, modo e falha do
 enrichment e timeouts dos providers. Os limites de profile atuais (`10/25/45`)
@@ -252,7 +260,7 @@ A submissão paga continua sendo feita uma única vez em `GET /api-sync/check/{s
 
 Submissão e polling compartilham um único deadline definido por `IMEI_TIMEOUT_MS`, um único `AbortController` e intervalo curto entre consultas. `Done` é normalizado normalmente para `CLEAN`, `BLACKLISTED` ou `UNKNOWN`. Somente `Rejected` produz `PROVIDER_REJECTED`; `Refunded`, envelope inválido, erro HTTP/JSON e falha de polling continuam técnicos. Se o job permanecer pendente até o deadline, o resultado é `UNAVAILABLE` com motivo interno `PENDING_TIMEOUT`, sem pontos antifraude e sem evidência reutilizável no Cache V2.
 
-Quando disponível, a auditoria preserva uma referência interna no formato `imei-info-search:{id}` e o envelope retornado, sem registrar a API key. Analysis Replay antecede o provider, mas a política interna `imei-blacklist-v3` torna incompatíveis os Replays das interpretações anteriores; novos resultados técnicos também não são persistidos. Smoke tests controlados ainda devem usar um novo `proposalId` para isolamento operacional (e nunca repetir uma submissão paga apenas para contornar Replay).
+Quando disponível, a auditoria preserva uma referência interna no formato `imei-info-search:{id}` e o envelope retornado, sem registrar a API key. Analysis Replay antecede o provider, mas a política interna `imei-blacklist-v4` torna incompatíveis os Replays anteriores; novos resultados técnicos também não são persistidos. Smoke tests controlados ainda devem usar um novo `proposalId` para isolamento operacional (e nunca repetir uma submissão paga apenas para contornar Replay).
 
 ### Cache, versões e decisão
 

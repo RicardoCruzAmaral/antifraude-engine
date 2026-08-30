@@ -10,7 +10,7 @@ import type { InputSummary } from "../../domain/contracts";
 import { buildReplayInput } from "./replayInput";
 
 export type AnalysisPolicyVersion =
-  `score-v1|imei-${"legacy-v1" | "blacklist-v3"}|cfg:${string}`;
+  `score-v1|imei-${"legacy-v2" | "blacklist-v4"}|cfg:${string}`;
 
 export type AnalysisReplayReadDependencies = {
   analysisReplayRepository: AnalysisReplayRepository | null;
@@ -27,7 +27,7 @@ export function resolveAnalysisPolicyVersion(
   imeiBlacklistV1Enabled: boolean,
   decisionConfigFingerprint: string
 ): AnalysisPolicyVersion {
-  const imeiPolicy = imeiBlacklistV1Enabled ? "imei-blacklist-v3" : "imei-legacy-v1";
+  const imeiPolicy = imeiBlacklistV1Enabled ? "imei-blacklist-v4" : "imei-legacy-v2";
   return `score-v1|${imeiPolicy}|cfg:${decisionConfigFingerprint}`;
 }
 
@@ -37,8 +37,8 @@ function record(
 ) {
   try {
     dependencies.telemetry.record(event);
-  } catch (error) {
-    console.error("[analysis-replay-read] telemetry failed", error);
+  } catch {
+    console.error("[analysis-replay-read] telemetry failed");
   }
 }
 
@@ -136,8 +136,11 @@ export async function readAnalysisReplay(
       details: { analysisPolicyVersion: input.analysisPolicyVersion },
     });
     return { state: "FALLBACK", cacheState: lookup.state };
-  } catch (error) {
-    console.error("[analysis-replay-read] lookup failed", error);
+  } catch {
+    console.error("[analysis-replay-read] lookup failed", {
+      traceId: input.traceId,
+      reason: "LOOKUP_FAILED",
+    });
     record(dependencies, {
       name: "cache_v2_replay_read_backend_error",
       traceId: input.traceId,

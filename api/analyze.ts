@@ -79,7 +79,10 @@ function composeCacheV2(
   try {
     config = resolveCacheV2Config();
   } catch (error) {
-    console.error("[cache-v2-shadow] invalid configuration", error);
+    console.error("[cache-v2-shadow] invalid configuration", {
+      traceId,
+      reason: "INVALID_CONFIGURATION",
+    });
     consoleCacheV2ShadowTelemetry.record({
       name: "cache_v2_configuration_error",
       traceId,
@@ -95,8 +98,11 @@ function composeCacheV2(
   let lookupTokenService = null;
   try {
     lookupTokenService = createHmacLookupTokenServiceFromEnv();
-  } catch (error) {
-    console.error("[cache-v2-shadow] HMAC unavailable", error);
+  } catch {
+    console.error("[cache-v2-shadow] HMAC unavailable", {
+      traceId,
+      reason: "HMAC_KEY_UNAVAILABLE",
+    });
     consoleCacheV2ShadowTelemetry.record({
       name: "cache_v2_configuration_error",
       traceId,
@@ -107,8 +113,11 @@ function composeCacheV2(
   let adapters = null;
   try {
     adapters = createSupabaseCacheV2AdaptersOrNull();
-  } catch (error) {
-    console.error("[cache-v2-shadow] Supabase adapters unavailable", error);
+  } catch {
+    console.error("[cache-v2-shadow] Supabase adapters unavailable", {
+      traceId,
+      reason: "ADAPTER_UNAVAILABLE",
+    });
     consoleCacheV2ShadowTelemetry.record({
       name: "cache_v2_configuration_error",
       traceId,
@@ -186,6 +195,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const traceId = crypto.randomUUID();
 
   try {
+    res.setHeader("X-Request-Id", traceId);
+
     if (req.method !== "POST") {
       res.setHeader("Allow", "POST");
       return res.status(405).json({ ok: false, traceId, error: "Method not allowed" });
@@ -250,13 +261,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       },
     });
     return res.status(result.statusCode).json(result.body);
-  } catch (err: any) {
-    console.error("[analyze] fatal", err);
+  } catch {
+    console.error("[analyze] fatal", { traceId, reason: "UNHANDLED_ERROR" });
     return res.status(500).json({
       ok: false,
       traceId,
       error: "FUNCTION_INVOCATION_FAILED",
-      details: err?.message ?? String(err),
     });
   }
 }
