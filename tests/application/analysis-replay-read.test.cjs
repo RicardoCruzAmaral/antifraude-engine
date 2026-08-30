@@ -356,15 +356,15 @@ for (const [fromBlacklist, toBlacklist] of [[false, true], [true, false]]) {
     await run.execute({ ...SYNTHETIC_INPUT, imeiCode: null }, { imeiBlacklistV1Enabled: toBlacklist });
     assert.equal(run.calls.enrichment, before + 1);
     assert.match(run.replay.calls.gets[0].analysisPolicyVersion,
-      new RegExp(`^score-v1\\|imei-${fromBlacklist ? "blacklist-v4" : "legacy-v2"}\\|cfg:[a-f0-9]{64}$`));
+      new RegExp(`^score-v1\\|imei-${fromBlacklist ? "blacklist-v5" : "legacy-v3"}\\|cfg:[a-f0-9]{64}$`));
     assert.match(run.replay.calls.gets[1].analysisPolicyVersion,
-      new RegExp(`^score-v1\\|imei-${toBlacklist ? "blacklist-v4" : "legacy-v2"}\\|cfg:[a-f0-9]{64}$`));
+      new RegExp(`^score-v1\\|imei-${toBlacklist ? "blacklist-v5" : "legacy-v3"}\\|cfg:[a-f0-9]{64}$`));
   });
 }
 
 for (const { label, enabled, oldVersion, currentVersion } of [
-  { label: "legado", enabled: false, oldVersion: "imei-legacy-v1", currentVersion: "imei-legacy-v2" },
-  { label: "Blacklist", enabled: true, oldVersion: "imei-blacklist-v3", currentVersion: "imei-blacklist-v4" },
+  { label: "legado", enabled: false, oldVersion: "imei-legacy-v2", currentVersion: "imei-legacy-v3" },
+  { label: "Blacklist", enabled: true, oldVersion: "imei-blacklist-v4", currentVersion: "imei-blacklist-v5" },
 ]) {
   test(`Replay ${label} anterior produz MISS após o bump de privacidade e a versão atual continua compatível`, async () => {
     const run = fixture({ shadow: true });

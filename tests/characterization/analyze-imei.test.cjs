@@ -30,14 +30,14 @@ test("events públicos expõem somente presença categórica do IMEI", async () 
     imeiResult: providerResult,
   });
 
-  const inputEvent = result.body.events.find(
+  const inputEvent = result.internalBody.events.find(
     (event) => event.step === "input_summary_built"
   );
   assert.deepEqual(inputEvent.meta, { hasImeiCode: true });
   assert.equal(JSON.stringify(result.body).includes(rawImei), false);
-  assert.equal(Object.hasOwn(result.body.imei.summary, "imei_checked"), false);
-  assert.equal(result.body.imei.summary.model_name, "Synthetic Phone");
-  assert.equal(result.body.imei.reason, "IMEI_OK");
+  assert.equal(Object.hasOwn(result.internalBody.imei.summary, "imei_checked"), false);
+  assert.equal(result.internalBody.imei.summary.model_name, "Synthetic Phone");
+  assert.equal(result.internalBody.imei.reason, "IMEI_OK");
   assert.equal(result.body.decision, "APPROVE");
   assert.equal(result.calls.imei.length, 1);
 });
@@ -65,9 +65,9 @@ for (const reason of [
     assert.equal(result.calls.supabase.length, 0);
     assert.equal(result.calls.enrichment.length, 1);
     assert.equal(result.calls.imei.length, 1);
-    assert.equal(result.body.imei.reason, reason);
+    assert.equal(result.internalBody.imei.reason, reason);
     assert.deepEqual(
-      result.body.events.map((event) => event.step),
+      result.internalBody.events.map((event) => event.step),
       [
         "request_received",
         "fingerprint_snapshot",
@@ -88,7 +88,7 @@ for (const reason of [
         "response_sent",
       ]
     );
-    assert.deepEqual(projectDecision(result.body), {
+    assert.deepEqual(projectDecision(result.internalBody), {
       decision: "APPROVE",
       score: hasPenalty ? 5 : 0,
       reasons: expectedBreakdown.map((item) => item.rule),
@@ -97,7 +97,7 @@ for (const reason of [
       hardBlock: { isHardBlock: false, reasons: [] },
     });
 
-    const scoreComputedEvent = result.body.events.find(
+    const scoreComputedEvent = result.internalBody.events.find(
       (event) => event.step === "score_computed"
     );
     assert.equal(scoreComputedEvent.meta.score, 0);
@@ -113,7 +113,7 @@ test("SCORE_IMEI_PROBLEM continua configurando a penalidade do handler", async (
     env: { SCORE_IMEI_PROBLEM: "7" },
   });
 
-  assert.deepEqual(projectDecision(result.body), {
+  assert.deepEqual(projectDecision(result.internalBody), {
     decision: "APPROVE",
     score: 7,
     reasons: ["RISCO_BAIXISSIMO", "PROB_ALTISSIMA", "IMEI_INVALID"],
@@ -137,7 +137,7 @@ test("hard block textual pula a chamada IMEI", async () => {
 
   assert.equal(result.calls.imei.length, 0);
   assert.deepEqual(
-    result.body.events.map((event) => event.step),
+    result.internalBody.events.map((event) => event.step),
     [
       "request_received",
       "fingerprint_snapshot",
@@ -154,7 +154,7 @@ test("hard block textual pula a chamada IMEI", async () => {
       "response_sent",
     ]
   );
-  assert.deepEqual(projectDecision(result.body), {
+  assert.deepEqual(projectDecision(result.internalBody), {
     decision: "DECLINE",
     score: null,
     reasons: ["NOME DIVERGENTE"],
@@ -179,13 +179,13 @@ test("fingerprint sintético é devolvido, mas não altera score ou decisão", a
     enrichmentResult: enrichmentResult(enrichmentSummary()),
   });
 
-  assert.equal(result.body.fingerprint.os, "Android");
-  assert.equal(result.body.fingerprint.isMobile, false);
+  assert.equal(result.internalBody.fingerprint.os, "Android");
+  assert.equal(result.internalBody.fingerprint.isMobile, false);
   assert.equal(result.body.score, 0);
   assert.equal(result.body.decision, "APPROVE");
   assert.equal(result.calls.imei.length, 0);
   assert.deepEqual(
-    result.body.events.map((event) => event.step),
+    result.internalBody.events.map((event) => event.step),
     [
       "request_received",
       "fingerprint_snapshot",
@@ -206,7 +206,7 @@ test("fingerprint sintético é devolvido, mas não altera score ou decisão", a
     ]
   );
 
-  const scoreComputedEvent = result.body.events.find(
+  const scoreComputedEvent = result.internalBody.events.find(
     (event) => event.step === "score_computed"
   );
   assert.deepEqual(scoreComputedEvent.meta.flags, {

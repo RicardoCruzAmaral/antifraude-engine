@@ -32,6 +32,7 @@ import {
   authenticateAnalyzeRequest,
   validateAnalyzeRequest,
 } from "../src/infrastructure/http/analyzeRequest";
+import { toPublicAnalyzeResponse } from "../src/infrastructure/http/publicAnalyzeResponse";
 
 function envInt(name: string, fallback: number) {
   const value = Number(process.env[name]);
@@ -199,7 +200,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (req.method !== "POST") {
       res.setHeader("Allow", "POST");
-      return res.status(405).json({ ok: false, traceId, error: "Method not allowed" });
+      return res.status(405).json({ ok: false, traceId, error: "METHOD_NOT_ALLOWED" });
     }
 
     const authentication = authenticateAnalyzeRequest(
@@ -260,6 +261,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         decisionCacheV1ReadEnabled: cacheV2.decisionCacheV1ReadEnabled,
       },
     });
+    if (result.statusCode >= 200 && result.statusCode < 300) {
+      return res.status(result.statusCode).json(toPublicAnalyzeResponse(result.body));
+    }
     return res.status(result.statusCode).json(result.body);
   } catch {
     console.error("[analyze] fatal", { traceId, reason: "UNHANDLED_ERROR" });

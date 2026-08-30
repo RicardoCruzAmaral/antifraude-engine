@@ -36,7 +36,7 @@ test("entrada expirada é observada como miss e não pula enrichment", async () 
     persistence: persistence({ cacheHit: null }),
   });
   assert.equal(result.statusCode, 200);
-  assert.equal(result.body.source, "engine");
+  assert.equal(result.internalBody.source, "engine");
   assert.equal(result.calls.enrichment.length, 1);
 });
 
@@ -57,7 +57,7 @@ test("cache hit pula enrichment e IMEI e grava decision_log", async () => {
     }),
   });
   assert.equal(result.statusCode, 200);
-  assert.equal(result.body.source, "cache");
+  assert.equal(result.internalBody.source, "cache");
   assert.equal(result.body.ruleVersion, "cached-v1");
   assert.equal(result.calls.enrichment.length, 0);
   assert.equal(result.calls.imei.length, 0);
@@ -126,10 +126,17 @@ test("resultado engine grava decision_log completo", async () => {
   const log = result.calls.decisionLog[0];
   assert.equal(log.source, "engine");
   assert.equal(log.cacheHit, false);
-  assert.equal(log.decision, result.body.decision);
-  assert.equal(log.ruleVersion, result.body.ruleVersion);
+  assert.equal(log.decision, result.internalBody.decision);
+  assert.equal(log.ruleVersion, result.internalBody.ruleVersion);
   assert.deepEqual(log.inputSummary.cpf, SYNTHETIC_INPUT.cpf.replace(/\D/g, ""));
   assert.ok(Array.isArray(log.events));
+  assert.ok(Array.isArray(result.internalBody.events));
+  assert.equal(result.internalBody.source, "engine");
+  assert.equal(result.internalBody.cpf, SYNTHETIC_INPUT.cpf.replace(/\D/g, ""));
+  assert.deepEqual(
+    Object.keys(result.body).sort(),
+    ["decision", "ok", "reasons", "ruleVersion", "score", "traceId"]
+  );
 });
 
 test("enrichment_raw recebe payload observado sem alterar decisão", async () => {
@@ -188,7 +195,7 @@ test("SUPABASE ausente com policy padrão continua", async () => {
     enrichmentResult: enrichmentResult(enrichmentSummary()),
   });
   assert.equal(result.statusCode, 200);
-  assert.ok(result.body.events.some((event) => event.step === "supabase_missing_continue"));
+  assert.ok(result.internalBody.events.some((event) => event.step === "supabase_missing_continue"));
 });
 
 function fakeSupabase(behavior = {}) {

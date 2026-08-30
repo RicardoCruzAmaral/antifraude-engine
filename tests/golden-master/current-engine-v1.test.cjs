@@ -38,6 +38,6 @@ for (const fixture of golden.cases) {
       result.calls.imei.length,
       fixture.inputOverrides.imeiCode && !fixture.expected.hardBlock.isHardBlock ? 1 : 0
     );
-    assert.deepEqual(projectDecision(result.body), fixture.expected);
+    assert.deepEqual(projectDecision(result.internalBody), fixture.expected);
   });
 }

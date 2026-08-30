@@ -10,7 +10,7 @@ import type { InputSummary } from "../../domain/contracts";
 import { buildReplayInput } from "./replayInput";
 
 export type AnalysisPolicyVersion =
-  `score-v1|imei-${"legacy-v2" | "blacklist-v4"}|cfg:${string}`;
+  `score-v1|imei-${"legacy-v3" | "blacklist-v5"}|cfg:${string}`;
 
 export type AnalysisReplayReadDependencies = {
   analysisReplayRepository: AnalysisReplayRepository | null;
@@ -27,7 +27,7 @@ export function resolveAnalysisPolicyVersion(
   imeiBlacklistV1Enabled: boolean,
   decisionConfigFingerprint: string
 ): AnalysisPolicyVersion {
-  const imeiPolicy = imeiBlacklistV1Enabled ? "imei-blacklist-v4" : "imei-legacy-v2";
+  const imeiPolicy = imeiBlacklistV1Enabled ? "imei-blacklist-v5" : "imei-legacy-v3";
   return `score-v1|${imeiPolicy}|cfg:${decisionConfigFingerprint}`;
 }
 

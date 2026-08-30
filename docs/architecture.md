@@ -2,13 +2,28 @@
 
 ## Fluxo de análise
 
-`api/analyze.ts` cria o trace e executa, nesta ordem: método HTTP, autenticação/configuração, validação do body e somente então resolução da configuração e composição dos adapters. O `AnalyzeAntifraudUseCase` consulta o cache e, em caso de miss, executa enrichment, pré-avaliação, IMEI quando aplicável, avaliação final, cache e auditoria. O resultado retorna à API, que preserva o status e o body HTTP.
+`api/analyze.ts` cria o trace e executa, nesta ordem: método HTTP, autenticação/configuração, validação do body e somente então resolução da configuração e composição dos adapters. O `AnalyzeAntifraudUseCase` consulta o cache e, em caso de miss, executa enrichment, pré-avaliação, IMEI quando aplicável, avaliação final, cache e auditoria. No limite HTTP, uma allowlist tipada transforma resultados 2xx no contrato público V1.
 
 ## Segurança da API V1
 
 `POST /api/analyze` exige `Authorization: Bearer <ANTIFRAUD_API_KEY>`. A chave existe apenas no environment, é comparada com `crypto.timingSafeEqual` depois da verificação de comprimento e nunca é registrada ou devolvida. Chave ausente no servidor falha fechada com `503`; credencial ausente, inválida ou malformada retorna `401`. Outros métodos retornam `405` com `Allow: POST`. `/api/health` permanece público e expõe somente seu contrato mínimo atual.
 
 Cada chamada HTTP de `/api/analyze` recebe um UUID novo no header `X-Request-Id`. O `traceId` do body identifica a análise; em um Analysis Replay HIT ele continua sendo o trace original armazenado, enquanto `X-Request-Id` identifica a request atual.
+
+O contrato oficial de sucesso de `POST /api/analyze` é:
+
+```json
+{
+  "ok": true,
+  "traceId": "11111111-1111-4111-8111-111111111111",
+  "decision": "APPROVE",
+  "score": 30,
+  "reasons": ["RISCO_ALTO"],
+  "ruleVersion": "score-v1+imei-blacklist-v1"
+}
+```
+
+`decision` é o campo autoritativo para o fluxo de compra: `APPROVE` permite continuar e `DECLINE` deve seguir o tratamento de recusa definido pela integração. Consumidores não devem recalcular a decisão a partir de `score`, `reasons`, profiles ou thresholds. `score` e `reasons` são informativos/auditáveis; o score pode ser `null` quando o motor não o calcula, como em hard blocks e fallbacks técnicos existentes. O header `X-Request-Id` não faz parte do body.
 
 O body de analyze usa schema fechado. Apenas `cpf` é obrigatório; deve ser string com 11 dígitos, com ou sem pontuação padrão, e é encaminhado sem pontuação. O checksum não é validado nesta etapa. São opcionais e aceitam `null`: `cep`, `nome`, `email`, `device`, `imeiCode`, `sessionId`, `proposalId`, `partnerCode`, `salesChannel`, `valor_celular`, `modelo_declarado` e `telefone_contato`. `valor_celular`, quando presente, é number finito e não negativo; string numérica não é aceita. A validade antifraude do IMEI continua no domínio, portanto uma string como `"123"` ainda pode resultar em `IMEI_INVALID`, não em erro HTTP.
 
@@ -71,19 +86,19 @@ Shadow writes aceitos:
 - IMEI: fatos válidos equivalentes a `IMEI_OK`/`IMEI_INVALID` são persistidos; mismatch e marca esperada são contexto da proposta e são reaplicados na leitura. `IMEI_FAIL`, timeout e erros técnicos não são persistidos no V2.
 - Replay: resposta concluída do engine ou cache V1, persistida com a política interna efetiva. A leitura ocorre somente quando `ANALYSIS_REPLAY_ENABLED=true`.
 
-A telemetria shadow usa um sink interno separado. Ela não é adicionada aos `events` públicos do response, preservando o contrato HTTP e o golden master.
+A telemetria shadow usa um sink interno separado. Ela não é adicionada ao contrato HTTP público nem aos events internos ordinários do resultado.
 
 ### Replay input deliberado
 
-O hash canônico inclui: CPF, nome, email, telefone, CEP, valor, parceiro, canal, proposta, modelo declarado, IMEI e os campos de device atualmente devolvidos no snapshot público (`ip`, `visitorId`, OS, GPU, cores, mobilidade, versão do OS, browser, dimensões de tela e provider do fingerprint). Esses campos de device ainda não pontuam, mas entram porque alteram o response atual; omiti-los permitiria devolver um snapshot antigo para um payload diferente.
+O hash canônico inclui: CPF, nome, email, telefone, CEP, valor, parceiro, canal, proposta, modelo declarado, IMEI e os campos de device mantidos no snapshot interno (`ip`, `visitorId`, OS, GPU, cores, mobilidade, versão do OS, browser, dimensões de tela e provider do fingerprint). Esses campos de device ainda não pontuam; permanecem no hash para preservar a identidade histórica do artefato interno sem alterar a lógica de fingerprint nesta etapa.
 
-Ficam excluídos: `sessionId`, `collectedAt`, request IDs técnicos do fingerprint, timestamps de transporte, propriedades extras do device e a ordem das propriedades JSON. Esses campos não alteram hoje a decisão nem o snapshot público relevante. `analysisPolicyVersion` e `cacheSchemaVersion` não entram no input hash porque participam separadamente da identidade e compatibilidade do Replay.
+Ficam excluídos: `sessionId`, `collectedAt`, request IDs técnicos do fingerprint, timestamps de transporte, propriedades extras do device e a ordem das propriedades JSON. Esses campos não alteram hoje a decisão nem o snapshot interno relevante. `analysisPolicyVersion` e `cacheSchemaVersion` não entram no input hash porque participam separadamente da identidade e compatibilidade do Replay.
 
 ### Raw e segurança
 
 Os caches V2 armazenam somente a evidência normalizada necessária para reutilização e uma `rawReference` opcional. O payload original permanece nos repositories raw de auditoria.
 
-O evento HTTP público `input_summary_built` expõe somente `{ hasImeiCode: boolean }`; o IMEI bruto não é devolvido nos events. A serialização pública do resumo IMEI legado também omite `imei_checked`, sem alterar o resultado interno do provider ou a evidência factual. Logs operacionais registram categorias, trace técnico, estados e durações, sem body, credenciais ou payload raw de provider.
+O evento interno/auditável `input_summary_built` mantém somente `{ hasImeiCode: boolean }`; o IMEI bruto também é omitido do resumo interno serializado como `imei_checked`. Nenhum event ou resumo IMEI integra o contrato HTTP público. Logs operacionais registram categorias, trace técnico, estados e durações, sem body, credenciais ou payload raw de provider.
 
 CPF e IMEI nunca são chaves cruas nas tabelas V2: são tokenizados por HMAC-SHA-256 com `EVIDENCE_LOOKUP_HMAC_KEY`. O segredo deve ser separado das credenciais dos providers, nunca logado e rotacionado por procedimento compatível com invalidação/reindexação. As tabelas têm RLS habilitado e não concedem acesso direto a `anon` ou `authenticated`. Retenção e descarte ainda precisam de política formal.
 
@@ -152,12 +167,12 @@ O identificador interno de comportamento tem o formato:
 analysisPolicyVersion = score-v1 | política IMEI | cfg:<SHA-256>
 ```
 
-Os prefixos atuais são `score-v1|imei-legacy-v2|cfg:` e
-`score-v1|imei-blacklist-v4|cfg:`. Ambos avançaram exclusivamente para
-invalidar Replays cujo response persistido podia conter o IMEI bruto em
-`input_summary_built.meta.imeiCode`. A mudança afeta somente a compatibilidade
-do Analysis Replay; não altera Cache V2 de evidência, normalizers nem o
-`ruleVersion` HTTP público. O hash é o
+Os prefixos atuais são `score-v1|imei-legacy-v3|cfg:` e
+`score-v1|imei-blacklist-v5|cfg:`. Ambos avançaram para invalidar Replays
+anteriores ao contrato HTTP público reduzido; assim, bodies persistidos com
+CPF, IMEI, events, fingerprint, timings ou score breakdown não são reutilizados.
+A mudança afeta somente a compatibilidade do Analysis Replay; não altera Cache
+V2 de evidência, normalizers nem o `ruleVersion` HTTP público. O hash é o
 `decisionConfigFingerprint`: uma serialização canônica dos valores
 efetivamente resolvidos para pesos de score, penalidade IMEI, modo e falha do
 enrichment e timeouts dos providers. Os limites de profile atuais (`10/25/45`)
@@ -186,7 +201,7 @@ fluxo existente e não governa compatibilidade do Replay. Portanto:
 Essa separação impede reutilização entre IMEI legado e IMEI Blacklist V1 e
 entre configurações decisórias diferentes.
 
-- `HIT` defensivamente válido e não expirado: devolve exatamente `statusCode` e `body` armazenados; não consulta V1, evidence caches ou providers; não executa engine, auditoria de nova decisão ou shadow rewrite.
+- `HIT` defensivamente válido e não expirado: devolve internamente o `statusCode` e o artefato armazenado; no limite HTTP, a mesma allowlist tipada produz o contrato público reduzido. Não consulta V1, evidence caches ou providers; não executa engine, auditoria de nova decisão ou shadow rewrite.
 - `MISS`, `EXPIRED`, `INCOMPATIBLE` e `BACKEND_ERROR`: executam o fluxo atual normalmente. Erros de hash, configuração, HMAC ou adapter também fazem bypass best-effort.
 - HIT não altera `createdAt`/`expiresAt` e não implementa sliding expiration.
 - `ANALYSIS_REPLAY_TTL_DAYS` possui default independente de 30 dias e aceita override positivo por ENV.
@@ -205,7 +220,7 @@ A identidade consultada é o token HMAC do CPF, provider e versões de contrato,
 - `MISS`, `EXPIRED`, `INCOMPATIBLE` ou `BACKEND_ERROR`: chama TechTrail exatamente uma vez, sem stale-while-revalidate.
 - HMAC/config/adapter indisponível: bypass best-effort e chamada normal ao provider.
 
-Um HIT não cria `enrichment_raw`, não renova `fetchedAt`/`expiresAt` e não dispara shadow write da mesma evidência. Provenance (`state`, source, fetched/expiry e `rawReference`) é acrescentada somente à cópia dos events persistida em `decision_log`; não aparece nos events do response. Para preservar a sequência pública histórica, o step legado `enrichment_raw_saved` continua presente no response mesmo no HIT, embora nenhuma inserção raw seja executada — débito semântico de observabilidade já conhecido.
+Um HIT não cria `enrichment_raw`, não renova `fetchedAt`/`expiresAt` e não dispara shadow write da mesma evidência. Provenance (`state`, source, fetched/expiry e `rawReference`) é acrescentada somente à cópia dos events persistida em `decision_log`. Para preservar a sequência interna histórica, o step legado `enrichment_raw_saved` continua no artefato de análise mesmo no HIT, embora nenhuma inserção raw seja executada — débito semântico interno já conhecido.
 
 ## IMEI Cache V2 READ — AVAILABLE BEHIND FLAG
 
@@ -260,7 +275,7 @@ A submissão paga continua sendo feita uma única vez em `GET /api-sync/check/{s
 
 Submissão e polling compartilham um único deadline definido por `IMEI_TIMEOUT_MS`, um único `AbortController` e intervalo curto entre consultas. `Done` é normalizado normalmente para `CLEAN`, `BLACKLISTED` ou `UNKNOWN`. Somente `Rejected` produz `PROVIDER_REJECTED`; `Refunded`, envelope inválido, erro HTTP/JSON e falha de polling continuam técnicos. Se o job permanecer pendente até o deadline, o resultado é `UNAVAILABLE` com motivo interno `PENDING_TIMEOUT`, sem pontos antifraude e sem evidência reutilizável no Cache V2.
 
-Quando disponível, a auditoria preserva uma referência interna no formato `imei-info-search:{id}` e o envelope retornado, sem registrar a API key. Analysis Replay antecede o provider, mas a política interna `imei-blacklist-v4` torna incompatíveis os Replays anteriores; novos resultados técnicos também não são persistidos. Smoke tests controlados ainda devem usar um novo `proposalId` para isolamento operacional (e nunca repetir uma submissão paga apenas para contornar Replay).
+Quando disponível, a auditoria preserva uma referência interna no formato `imei-info-search:{id}` e o envelope retornado, sem registrar a API key. Analysis Replay antecede o provider, mas a política interna `imei-blacklist-v5` torna incompatíveis os Replays anteriores; novos resultados técnicos também não são persistidos. Smoke tests controlados ainda devem usar um novo `proposalId` para isolamento operacional (e nunca repetir uma submissão paga apenas para contornar Replay).
 
 ### Cache, versões e decisão
 
@@ -281,4 +296,4 @@ As versões e o namespace de serviço impedem que evidências Apple/Samsung/Xiao
 
 Enquanto a política Blacklist está ligada, o `decision_cache` V1 por CPF é ignorado para leitura e escrita. Isso evita tanto pular uma consulta Blacklist por um APPROVE antigo quanto contaminar o rollback legado com uma decisão nova. A auditoria usa `score-v1+imei-blacklist-v1`; o caminho legado mantém `score-v1`.
 
-Telemetria Blacklist é interna/audit-only e não é acrescentada aos events HTTP públicos. Analysis Replay, quando habilitado, acontece antes do caminho Blacklist e separa sua identidade pela `analysisPolicyVersion`.
+Telemetria Blacklist é interna/audit-only e não integra o contrato HTTP público. Analysis Replay, quando habilitado, acontece antes do caminho Blacklist e separa sua identidade pela `analysisPolicyVersion`.

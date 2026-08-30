@@ -242,7 +242,7 @@ test("replay configurado grava resultado, hash e analysisPolicyVersion", async (
   const replay = fixture.calls.replayWrites[0];
   assert.equal(replay.proposalId, SYNTHETIC_INPUT.proposalId);
   assert.match(replay.analysisPolicyVersion,
-    /^score-v1\|imei-legacy-v2\|cfg:[a-f0-9]{64}$/);
+    /^score-v1\|imei-legacy-v3\|cfg:[a-f0-9]{64}$/);
   assert.equal(replay.result.statusCode, 200);
   assert.equal(replay.result.body, result.body);
   assert.equal(typeof replay.inputHash, "string");

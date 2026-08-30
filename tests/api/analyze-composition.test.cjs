@@ -8,6 +8,7 @@ const {
 } = require("../helpers/analyze-characterization-harness.cjs");
 
 const TEST_API_KEY = "synthetic-server-to-server-key";
+const PUBLIC_SUCCESS_FIELDS = ["decision", "ok", "reasons", "ruleVersion", "score", "traceId"];
 const VALID_BODY = Object.freeze({
   cpf: "00000000000",
   nome: "Pessoa Sintética",
@@ -62,12 +63,33 @@ function assertNoProcessing(calls) {
   assert.equal(calls.imeiRaw.length, 0);
 }
 
+function expandedSuccessBody(overrides = {}) {
+  return {
+    ok: true,
+    traceId: "11111111-1111-4111-8111-111111111111",
+    decision: "APPROVE",
+    score: 10,
+    reasons: ["SYNTHETIC_REASON"],
+    ruleVersion: "score-v1",
+    cpf: "00000000000",
+    imei: { reason: "IMEI_OK" },
+    events: [{ step: "decision_made" }],
+    source: "engine",
+    timingsMs: { totalMs: 1 },
+    fingerprint: { visitorId: "internal" },
+    scoreBreakdown: [{ rule: "SYNTHETIC_REASON", points: 10 }],
+    profile: "B1",
+    flags: { internal: true },
+    ...overrides,
+  };
+}
+
 test("composition root rejeita método diferente de POST com 405", async () => {
   const loaded = loadAnalyzeForCharacterization({ mockUseCase: true });
   const res = response();
   await loaded.exports.default({ method: "GET" }, res);
   assert.equal(res.statusCode, 405);
-  assert.equal(res.body.error, "Method not allowed");
+  assert.equal(res.body.error, "METHOD_NOT_ALLOWED");
   assert.equal(res.headers.allow, "POST");
   assert.equal(loaded.calls.persistenceFactory.length, 0);
   assert.equal(loaded.calls.useCaseConstruct.length, 0);
@@ -76,9 +98,10 @@ test("composition root rejeita método diferente de POST com 405", async () => {
 
 test("POST válido delega body e trace ao use case", async () => {
   await withIsolatedEnvironmentAsync({}, async () => {
+    const internalBody = expandedSuccessBody();
     const loaded = loadAnalyzeForCharacterization({
       mockUseCase: true,
-      useCaseResult: { statusCode: 200, body: { ok: true } },
+      useCaseResult: { statusCode: 200, body: internalBody },
     });
     const res = response();
     await loaded.exports.default(authorizedPost(), res);
@@ -86,8 +109,69 @@ test("POST válido delega body e trace ao use case", async () => {
     assert.deepEqual(loaded.calls.useCaseExecute[0].body, VALID_BODY);
     assert.equal(typeof loaded.calls.useCaseExecute[0].traceId, "string");
     assert.equal(typeof loaded.calls.useCaseExecute[0].startedAtMs, "number");
+    assert.deepEqual(Object.keys(res.body).sort(), PUBLIC_SUCCESS_FIELDS);
+    assert.deepEqual(res.body, {
+      ok: true,
+      traceId: internalBody.traceId,
+      decision: "APPROVE",
+      score: 10,
+      reasons: ["SYNTHETIC_REASON"],
+      ruleVersion: "score-v1",
+    });
   });
 });
+
+test("POST DECLINE retorna o mesmo conjunto exato de campos públicos", async () => {
+  await withIsolatedEnvironmentAsync({}, async () => {
+    const internalBody = expandedSuccessBody({
+      decision: "DECLINE",
+      score: 50,
+      reasons: ["RISCO_ALTO"],
+    });
+    const loaded = loadAnalyzeForCharacterization({
+      mockUseCase: true,
+      useCaseResult: { statusCode: 200, body: internalBody },
+    });
+    const res = response();
+    await loaded.exports.default(authorizedPost(), res);
+
+    assert.deepEqual(Object.keys(res.body).sort(), PUBLIC_SUCCESS_FIELDS);
+    assert.equal(res.body.decision, "DECLINE");
+    assert.equal(res.body.score, 50);
+    assert.deepEqual(res.body.reasons, ["RISCO_ALTO"]);
+  });
+});
+
+for (const { label, body, expectedDecision } of [
+  {
+    label: "hard block",
+    body: expandedSuccessBody({ decision: "DECLINE", score: null, reasons: ["NOME DIVERGENTE"] }),
+    expectedDecision: "DECLINE",
+  },
+  {
+    label: "IMEI BLACKLISTED",
+    body: expandedSuccessBody({ decision: "DECLINE", score: 30, reasons: ["IMEI_BLACKLISTED"] }),
+    expectedDecision: "DECLINE",
+  },
+  {
+    label: "IMEI CLEAN",
+    body: expandedSuccessBody({ decision: "APPROVE", score: 30, reasons: [] }),
+    expectedDecision: "APPROVE",
+  },
+]) {
+  test(`${label} preserva a decisão sem expor campos internos`, async () => {
+    await withIsolatedEnvironmentAsync({}, async () => {
+      const loaded = loadAnalyzeForCharacterization({
+        mockUseCase: true,
+        useCaseResult: { statusCode: 200, body },
+      });
+      const res = response();
+      await loaded.exports.default(authorizedPost(), res);
+      assert.deepEqual(Object.keys(res.body).sort(), PUBLIC_SUCCESS_FIELDS);
+      assert.equal(res.body.decision, expectedDecision);
+    });
+  });
+}
 
 test("status retornado pelo use case é respeitado", async () => {
   await withIsolatedEnvironmentAsync({}, async () => {
@@ -121,7 +205,10 @@ test("X-Request-Id identifica cada request HTTP sem substituir traceId reutiliza
     const replayTraceId = "original-analysis-trace";
     const loaded = loadAnalyzeForCharacterization({
       mockUseCase: true,
-      useCaseResult: { statusCode: 200, body: { ok: true, traceId: replayTraceId } },
+      useCaseResult: {
+        statusCode: 200,
+        body: expandedSuccessBody({ traceId: replayTraceId, source: "replay" }),
+      },
     });
     const first = response();
     const second = response();
@@ -134,6 +221,8 @@ test("X-Request-Id identifica cada request HTTP sem substituir traceId reutiliza
     assert.notEqual(first.headers["x-request-id"], second.headers["x-request-id"]);
     assert.equal(first.body.traceId, replayTraceId);
     assert.equal(second.body.traceId, replayTraceId);
+    assert.deepEqual(Object.keys(first.body).sort(), PUBLIC_SUCCESS_FIELDS);
+    assert.deepEqual(Object.keys(second.body).sort(), PUBLIC_SUCCESS_FIELDS);
   });
 });
 

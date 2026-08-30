@@ -200,6 +200,7 @@ function loadAnalyzeForCharacterization(options = {}) {
     persistenceFactory: [],
     useCaseConstruct: [],
     useCaseExecute: [],
+    useCaseResults: [],
   };
 
   const enrichmentAdapterModule = {
@@ -286,7 +287,21 @@ function loadAnalyzeForCharacterization(options = {}) {
           async execute(command) {
             calls.useCaseExecute.push(command);
             if (options.useCaseError) throw options.useCaseError;
-            return options.useCaseResult;
+            const result = options.useCaseResult;
+            if (result?.statusCode >= 200 && result?.statusCode < 300 && result?.body?.ok === true) {
+              return {
+                ...result,
+                body: {
+                  traceId: command.traceId,
+                  decision: "APPROVE",
+                  score: 0,
+                  reasons: [],
+                  ruleVersion: "score-v1",
+                  ...result.body,
+                },
+              };
+            }
+            return result;
           }
         },
       }
@@ -304,6 +319,22 @@ function loadAnalyzeForCharacterization(options = {}) {
       useCaseModule
     ) {
       return useCaseModule;
+    }
+    if (
+      request === "../src/application/useCases/analyzeAntifraud" &&
+      options.captureUseCaseResult
+    ) {
+      const actualUseCaseModule = defaultRequire(request);
+      return {
+        ...actualUseCaseModule,
+        AnalyzeAntifraudUseCase: class extends actualUseCaseModule.AnalyzeAntifraudUseCase {
+          async execute(command) {
+            const result = await super.execute(command);
+            calls.useCaseResults.push(result);
+            return result;
+          }
+        },
+      };
     }
     if (
       request ===
@@ -424,7 +455,12 @@ async function invokeAnalyze({ input, enrichmentResult, imeiResult, persistence,
   console.error = () => {};
 
   try {
-    const loaded = loadAnalyzeForCharacterization({ enrichmentResult, imeiResult, persistence });
+    const loaded = loadAnalyzeForCharacterization({
+      enrichmentResult,
+      imeiResult,
+      persistence,
+      captureUseCaseResult: true,
+    });
     const response = {
       statusCode: null,
       body: null,
@@ -452,6 +488,7 @@ async function invokeAnalyze({ input, enrichmentResult, imeiResult, persistence,
     return {
       statusCode: response.statusCode,
       body: response.body,
+      internalBody: loaded.calls.useCaseResults[0]?.body,
       headers: response.headers,
       calls: loaded.calls,
       networkCalls,
